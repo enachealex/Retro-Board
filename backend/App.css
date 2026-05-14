@@ -1,0 +1,86 @@
+
+/* Board Editing & Deleting Styles */
+.board-title-container {
+  display: flex;
+  align-items: center;
+}
+
+.board-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 1.8rem;
+  color: #172b4d;
+  margin: 0;
+}
+
+.edit-board-btn {
+  opacity: 0;
+  background: none;
+  border: none;
+  color: #6b778c;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 4px;
+  transition: opacity 0.2s, background-color 0.2s;
+}
+
+.board-title:hover .edit-board-btn {
+  opacity: 1;
+}
+
+.edit-board-btn:hover {
+  background-color: #ebecf0;
+  color: #172b4d;
+}
+
+.edit-board-input {
+  font-size: 1.8rem;
+  font-weight: bold;
+  color: #172b4d;
+  border: 2px solid #0052cc;
+  border-radius: 4px;
+  padding: 4px 8px;
+  outline: none;
+  font-family: inherit;
+  width: 300px;
+}
+
+.board-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+.delete-board-btn {
+  opacity: 0;
+  background: none;
+  border: none;
+  color: #de350b;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 3px;
+  transition: opacity 0.2s;
+}
+
+.board-list li:hover .delete-board-btn {
+  opacity: 1;
+}
+
+.delete-board-btn:hover {
+  background-color: #ffebe6;
+}
+
+.board-link-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
