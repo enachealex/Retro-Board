@@ -103,6 +103,7 @@ async function sendPasswordResetEmail(email, resetUrl) {
                 console.log(`Password reset email sent to ${email}`);
         } catch (err) {
                 console.error('Failed to send password reset email:', err.message);
+                throw err; // propagate so the caller can report the failure
         }
 }
 
@@ -948,25 +949,41 @@ io.on('connection', (socket) => {
 
     // Register user socket mapping when client identifies itself
     socket.on('register:user', (userId) => {
-        if (!userId) return;
-        socket.userId = userId;
-        if (!userSockets.has(userId)) userSockets.set(userId, new Set());
-        userSockets.get(userId).add(socket.id);
+        try {
+            if (!userId) return;
+            socket.userId = userId;
+            if (!userSockets.has(userId)) userSockets.set(userId, new Set());
+            userSockets.get(userId).add(socket.id);
+        } catch (err) {
+            console.error('socket register:user error:', err.message);
+        }
     });
 
     // Room-based subscriptions: clients join only the board they are viewing
     socket.on('join:board', (boardId) => {
-        socket.join(`board:${boardId}`);
+        try {
+            socket.join(`board:${boardId}`);
+        } catch (err) {
+            console.error('socket join:board error:', err.message);
+        }
     });
     socket.on('leave:board', (boardId) => {
-        socket.leave(`board:${boardId}`);
+        try {
+            socket.leave(`board:${boardId}`);
+        } catch (err) {
+            console.error('socket leave:board error:', err.message);
+        }
     });
 
     socket.on('disconnect', () => {
-        console.log(`Client disconnected: ${socket.id}`);
-        if (socket.userId && userSockets.has(socket.userId)) {
-            userSockets.get(socket.userId).delete(socket.id);
-            if (userSockets.get(socket.userId).size === 0) userSockets.delete(socket.userId);
+        try {
+            console.log(`Client disconnected: ${socket.id}`);
+            if (socket.userId && userSockets.has(socket.userId)) {
+                userSockets.get(socket.userId).delete(socket.id);
+                if (userSockets.get(socket.userId).size === 0) userSockets.delete(socket.userId);
+            }
+        } catch (err) {
+            console.error('socket disconnect error:', err.message);
         }
     });
 });
@@ -1131,20 +1148,34 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
         const first_name = isMasterAdd ? (firstName ? firstName.trim() : emailLower.split('@')[0]) : firstName.trim();
         const last_name = isMasterAdd ? (lastName ? lastName.trim() : '') : lastName.trim();
         const display_name = (first_name + (last_name ? ` ${last_name}` : '')).trim();
-        // Auto-generate a unique username from email prefix
+        // Auto-generate a unique username from email prefix.
+        // Rather than a check-then-insert (TOCTOU race), we attempt the INSERT directly
+        // and retry with a numeric suffix if the DB rejects it with ER_DUP_ENTRY.
+        const password_hash = isMasterAdd ? null : await hashPassword(password);
         const baseUsername = emailLower.split('@')[0].replace(/[^a-z0-9_]/g, '_').slice(0, 28);
         let username = baseUsername;
         let suffix = 1;
+        let result;
         while (true) {
-            const [existing] = await pool.query('SELECT id FROM users WHERE username = ?', [username]);
-            if (existing.length === 0) break;
-            username = `${baseUsername}_${suffix++}`;
+            try {
+                [result] = await pool.query(
+                    'INSERT INTO users (username, first_name, last_name, display_name, email, company, department, `lead`, is_admin, is_master, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [username, first_name, last_name, display_name, emailLower, finalCompany, finalDept, finalLead, is_admin, is_master, password_hash]
+                );
+                break; // INSERT succeeded
+            } catch (insertErr) {
+                if (insertErr.code === 'ER_DUP_ENTRY') {
+                    if (insertErr.message.includes('username')) {
+                        username = `${baseUsername}_${suffix++}`;
+                        continue; // retry with a new suffix
+                    }
+                    if (insertErr.message.includes('email')) {
+                        return res.status(409).json({ error: 'An account with this email already exists.' });
+                    }
+                }
+                throw insertErr; // unexpected error — rethrow to outer catch
+            }
         }
-        const password_hash = isMasterAdd ? null : await hashPassword(password);
-        const [result] = await pool.query(
-            'INSERT INTO users (username, first_name, last_name, display_name, email, company, department, `lead`, is_admin, is_master, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [username, first_name, last_name, display_name, emailLower, finalCompany, finalDept, finalLead, is_admin, is_master, password_hash]
-        );
         const newUser = { id: result.insertId, username, first_name, last_name, display_name, email: emailLower, company: finalCompany, department: finalDept, lead: finalLead, is_admin, is_master };
         const token = buildUserToken(newUser);
 
@@ -1256,7 +1287,11 @@ app.post('/api/auth/request-password-reset', authLimiter, async (req, res) => {
         );
 
         const resetUrl = `${getAppBaseUrl()}/?reset=${encodeURIComponent(token)}`;
-        sendPasswordResetEmail(user.email, resetUrl);
+        try {
+            await sendPasswordResetEmail(user.email, resetUrl);
+        } catch {
+            return res.status(502).json({ error: 'Failed to send reset email. Please check your SMTP configuration or try again later.' });
+        }
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1798,6 +1833,7 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
 app.put('/api/boards/:id', authMiddleware, async (req, res) => {
     const { name } = req.body;
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Only admins can rename boards' });
     try {
         const [boardRows] = await pool.query('SELECT * FROM boards WHERE id = ?', [req.params.id]);
         if (boardRows.length === 0) return res.status(404).json({ error: 'Board not found' });

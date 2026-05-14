@@ -36,10 +36,18 @@ export function AuthProvider({ children }) {
           // Token is expired or revoked — clear so login page shows
           localStorage.removeItem(TOKEN_KEY);
           localStorage.removeItem(USER_KEY);
+          localStorage.removeItem("retro_boards");
+          localStorage.removeItem("retro_active_board");
+          localStorage.removeItem("retro_board_cache");
+          localStorage.removeItem("retro_cache_owner");
+          localStorage.removeItem("retro_redirect_board_id");
           setToken(null);
           setUser(null);
+        } else if (!err.request) {
+          // Response received but unexpected error — log it
+          console.warn('Unexpected error during token validation:', err.message);
         }
-        // Network errors: keep the stored state as-is
+        // Network errors (no response): keep the stored state as-is
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -54,6 +62,12 @@ export function AuthProvider({ children }) {
   const clearAuth = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    // Clear all board cache data so it doesn't persist to the next session/user
+    localStorage.removeItem("retro_boards");
+    localStorage.removeItem("retro_active_board");
+    localStorage.removeItem("retro_board_cache");
+    localStorage.removeItem("retro_cache_owner");
+    localStorage.removeItem("retro_redirect_board_id");
     setToken(null);
     setUser(null);
     setAuthError(null);
