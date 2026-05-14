@@ -1,8 +1,8 @@
 {
-  "name": "openeye-retro-board",
+  "name": "retroboard",
   "private": true,
   "version": "1.0.0",
-  "description": "OpenEye Retro Board standalone app",
+  "description": "RetroBoard — Agile retrospective board",
   "main": "main.cjs",
   "type": "module",
   "scripts": {
@@ -15,8 +15,8 @@
     "electron:build": "vite build && electron-builder --win"
   },
   "build": {
-    "appId": "com.openeye.retroboard",
-    "productName": "OpenEye Retro Board",
+    "appId": "com.thejumpvault.retroboard",
+    "productName": "RetroBoard",
     "directories": {
       "output": "release"
     },

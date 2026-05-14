@@ -1,5 +1,8 @@
 const VALID_DEPARTMENTS = ['QA', 'SE', 'SDET'];
 
+// Default company name — override with DEFAULT_COMPANY env var
+const DEFAULT_COMPANY = process.env.DEFAULT_COMPANY || 'RetroBoard';
+
 const LEADS_BY_DEPT = {
     QA:  ['Nathan Robertson', 'Gabe Duncan', 'Brett Rogers', 'John Ezetta'],
     SE:  ['Dave Smith', 'Sean Montgomery'],
@@ -47,6 +50,7 @@ const DEFAULT_MASTER_EMAILS = process.env.DEFAULT_MASTER_EMAILS
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || '';
 
 module.exports = {
+    DEFAULT_COMPANY,
     VALID_DEPARTMENTS,
     LEADS_BY_DEPT,
     LEAD_DEFAULT_COLUMNS,

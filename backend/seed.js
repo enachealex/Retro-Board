@@ -8,30 +8,22 @@
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
+const { LEADS_BY_DEPT, LEAD_DEFAULT_COLUMNS: CONSTANTS_COLUMNS } = require('./config/constants');
+
 const RESET = process.argv.includes('--reset');
 
-const LEAD_DEFAULT_COLUMNS = [
-    'Rules',
-    'Ice Breaker',
-    'Gripes',
-    'Needs Improvement',
-    'Went Well',
-    'Wins/Shoutouts',
-    'Action Items',
-];
+const LEAD_DEFAULT_COLUMNS = CONSTANTS_COLUMNS;
 
-const ALL_LEADS = [
-    { name: 'Nathan Robertson', department: 'OWS' },
-    { name: 'Gabe Duncan',       department: 'OWS' },
-    { name: 'Brett Rogers',      department: 'Apex' },
-    { name: 'John Ezetta',       department: 'Apex' },
-];
+// Derive ALL_LEADS from authoritative LEADS_BY_DEPT in constants.js
+const ALL_LEADS = Object.entries(LEADS_BY_DEPT).flatMap(([dept, names]) =>
+    names.map(name => ({ name, department: dept }))
+);
 
 async function main() {
     const pool = mysql.createPool({
         host: process.env.DB_HOST || 'localhost',
-        user: process.env.DB_USER || 'root',
-        password: process.env.DB_PASSWORD || '',
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
         database: process.env.DB_NAME || 'retro_board',
         waitForConnections: true,
         connectionLimit: 5,
@@ -62,7 +54,7 @@ async function main() {
                 last_name VARCHAR(100) NOT NULL DEFAULT '',
                 display_name VARCHAR(150) NOT NULL,
                 email VARCHAR(255) NOT NULL UNIQUE,
-                department ENUM('OWS', 'Apex') NOT NULL DEFAULT 'OWS',
+                department ENUM('QA', 'SE', 'SDET') NOT NULL DEFAULT 'QA',
                 \`lead\` VARCHAR(150) DEFAULT NULL,
                 is_admin TINYINT(1) NOT NULL DEFAULT 0,
                 is_master TINYINT(1) NOT NULL DEFAULT 0,
@@ -76,7 +68,7 @@ async function main() {
             CREATE TABLE IF NOT EXISTS boards (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
-                department ENUM('OWS', 'Apex') NOT NULL DEFAULT 'OWS',
+                department ENUM('QA', 'SE', 'SDET') NOT NULL DEFAULT 'QA',
                 bg_image TEXT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )

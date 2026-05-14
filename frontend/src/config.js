@@ -2,6 +2,9 @@
 // Priority: HTTPS server > HTTP server > localhost fallback
 // Use VITE_SERVER_HOST env var to override (e.g. in .env.local for Electron builds pointing at a remote host)
 const SERVER_HOST = import.meta.env.VITE_SERVER_HOST || 'retroboard.thejumpvault.com';
+
+// Default company name — override with VITE_DEFAULT_COMPANY in .env or .env.local
+export const DEFAULT_COMPANY = import.meta.env.VITE_DEFAULT_COMPANY || 'RetroBoard';
 const SERVER_PORT = import.meta.env.VITE_SERVER_PORT || "5000";
 const SERVER_SSL_PORT = import.meta.env.VITE_SERVER_SSL_PORT || "5443";
 const LOCAL_PORT = "5000";

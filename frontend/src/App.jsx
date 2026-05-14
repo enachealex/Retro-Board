@@ -6,7 +6,7 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Trash2, Plus, GripVertical, X, Edit2, Check, Moon, Sun, User, Users, Settings, Info, Archive, ChevronDown, ChevronLeft, ChevronRight, LogOut, Eye, EyeOff, MoveRight, Image, UserPlus, UserMinus, Search, Upload, SmilePlus } from "lucide-react";
 import "./App.css";
 import { useAuth } from "./AuthContext";
-import { getApiUrl, getSocketUrl } from "./config";
+import { getApiUrl, getSocketUrl, DEFAULT_COMPANY } from "./config";
 
 const API_URL = getApiUrl();
 
@@ -209,15 +209,33 @@ const App = () => {
   useEffect(() => {
     const backupState = () => {
       if (activeBoard) {
-        // Save the transient columns and cards directly into cache on refresh
-        const currentCache = { ...boardCache, [activeBoard.id]: { columns, cards } };
-        localStorage.setItem("retro_board_cache", JSON.stringify(currentCache));
+        try {
+          // Save the transient columns and cards directly into cache on refresh
+          const currentCache = { ...boardCache, [activeBoard.id]: { columns, cards } };
+          localStorage.setItem("retro_board_cache", JSON.stringify(currentCache));
+        } catch (e) {
+          if (e.name === 'QuotaExceededError') {
+            console.warn('[RetroBoard] localStorage quota exceeded — clearing board cache');
+            localStorage.removeItem("retro_board_cache");
+          }
+        }
       } else {
-        localStorage.setItem("retro_board_cache", JSON.stringify(boardCache));
+        try {
+          localStorage.setItem("retro_board_cache", JSON.stringify(boardCache));
+        } catch (e) {
+          if (e.name === 'QuotaExceededError') {
+            console.warn('[RetroBoard] localStorage quota exceeded — clearing board cache');
+            localStorage.removeItem("retro_board_cache");
+          }
+        }
       }
-      localStorage.setItem("retro_boards", JSON.stringify(boards));
-      localStorage.setItem("retro_active_board", JSON.stringify(activeBoard));
-      localStorage.setItem("retro_cache_owner", user?.email || "");
+      try {
+        localStorage.setItem("retro_boards", JSON.stringify(boards));
+        localStorage.setItem("retro_active_board", JSON.stringify(activeBoard));
+        localStorage.setItem("retro_cache_owner", user?.email || "");
+      } catch (e) {
+        if (e.name === 'QuotaExceededError') console.warn('[RetroBoard] localStorage quota exceeded saving board list');
+      }
     };
 
     // Save in real-time on every state change safely
@@ -262,7 +280,7 @@ const App = () => {
   const [usersList, setUsersList] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [companyFilterOptions, setCompanyFilterOptions] = useState([]);
-  const [masterCompanyFilter, setMasterCompanyFilter] = useState(() => user?.company || "OpenEye");
+  const [masterCompanyFilter, setMasterCompanyFilter] = useState(() => user?.company || DEFAULT_COMPANY);
   const [editingUserId, setEditingUserId] = useState(null);
   const [editUserDept, setEditUserDept] = useState("");
   const [editUserLead, setEditUserLead] = useState("");
@@ -270,8 +288,8 @@ const App = () => {
   const [editUserLastName, setEditUserLastName] = useState("");
 
   const effectiveCompanyFilter = isSuperUser
-    ? (masterCompanyFilter || user?.company || "OpenEye")
-    : (user?.company || "OpenEye");
+    ? (masterCompanyFilter || user?.company || DEFAULT_COMPANY)
+    : (user?.company || DEFAULT_COMPANY);
 
   // Admin email management (masters)
   const [adminEmails, setAdminEmails] = useState([]);
@@ -930,10 +948,12 @@ const App = () => {
 
   // Persist archived items
   useEffect(() => {
-    localStorage.setItem("retro_archived_cards", JSON.stringify(archivedCards));
+    try { localStorage.setItem("retro_archived_cards", JSON.stringify(archivedCards)); }
+    catch (e) { if (e.name === 'QuotaExceededError') localStorage.removeItem("retro_archived_cards"); }
   }, [archivedCards]);
   useEffect(() => {
-    localStorage.setItem("retro_archived_columns", JSON.stringify(archivedColumns));
+    try { localStorage.setItem("retro_archived_columns", JSON.stringify(archivedColumns)); }
+    catch (e) { if (e.name === 'QuotaExceededError') localStorage.removeItem("retro_archived_columns"); }
   }, [archivedColumns]);
 
   // Close context menu and profile dropdown on outside click
@@ -1032,7 +1052,7 @@ const App = () => {
       if (data.boards) {
         const incomingBoards = Array.isArray(data.boards) ? data.boards : [];
         const scopedBoards = isSuperUser
-          ? incomingBoards.filter(b => (b.company || 'OpenEye') === effectiveCompanyFilter)
+          ? incomingBoards.filter(b => (b.company || DEFAULT_COMPANY) === effectiveCompanyFilter)
           : incomingBoards;
         if (isSuperUser) {
           const allowed = scopedBoards.filter(isBoardAllowed);
@@ -2552,7 +2572,7 @@ const App = () => {
                   value={effectiveCompanyFilter}
                   onChange={(e) => setMasterCompanyFilter(e.target.value)}
                 >
-                  {[...new Set([user?.company || "OpenEye", ...companyFilterOptions])].map((name) => (
+                  {[...new Set([user?.company || DEFAULT_COMPANY, ...companyFilterOptions])].map((name) => (
                     <option key={name} value={name}>{name}</option>
                   ))}
                 </select>
@@ -3376,7 +3396,7 @@ const App = () => {
                         <button onClick={openSettings}>
                           <Settings size={16} /> Settings
                         </button>
-                        <button onClick={() => { setIsProfileOpen(false); alert("OpenEye Retro Board v1.0\nBuilt with React + Vite"); }}>
+                        <button onClick={() => { setIsProfileOpen(false); alert("RetroBoard v1.0\nBuilt with React + Vite"); }}>
                           <Info size={16} /> About
                         </button>
                         <hr className="profile-dropdown-divider" />

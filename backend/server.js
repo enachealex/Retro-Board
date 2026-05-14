@@ -14,7 +14,7 @@ const fs = require('fs');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 require('dotenv').config();
-const { VALID_DEPARTMENTS, LEADS_BY_DEPT, LEAD_DEFAULT_COLUMNS, DEFAULT_ADMIN_EMAILS, DEFAULT_ADMIN_EMAILS_RAW, DEFAULT_MASTER_EMAILS, GIPHY_API_KEY } = require('./config/constants');
+const { DEFAULT_COMPANY, VALID_DEPARTMENTS, LEADS_BY_DEPT, LEAD_DEFAULT_COLUMNS, DEFAULT_ADMIN_EMAILS, DEFAULT_ADMIN_EMAILS_RAW, DEFAULT_MASTER_EMAILS, GIPHY_API_KEY } = require('./config/constants');
 
 // --- SSL Configuration ---
 const SSL_KEY_PATH = path.join(__dirname, 'certs', 'server.key');
@@ -827,6 +827,11 @@ const initDb = async () => {
             'CREATE INDEX IF NOT EXISTS idx_boards_name ON boards (name)',
             'CREATE INDEX IF NOT EXISTS idx_gifs_default ON gifs (is_default)',
             'CREATE INDEX IF NOT EXISTS idx_card_reactions_card ON card_reactions (card_id)',
+            // Frequently queried lookup columns
+            'CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)',
+            'CREATE INDEX IF NOT EXISTS idx_users_company ON users (company)',
+            'CREATE INDEX IF NOT EXISTS idx_board_invites_token ON board_invites (token)',
+            'CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash ON password_reset_tokens (token_hash)',
         ];
         for (const idx of indexes) {
             try { await pool.query(idx); } catch (e) { /* index may already exist */ }
@@ -992,7 +997,7 @@ io.on('connection', (socket) => {
 async function createDefaultAdminBoard(firstName, lastName, company, department, userId) {
     const boardName = `Retro - ${firstName} ${lastName}`;
     try {
-        const [result] = await pool.query('INSERT INTO boards (name, company, department) VALUES (?, ?, ?)', [boardName, company || 'OpenEye', department]);
+        const [result] = await pool.query('INSERT INTO boards (name, company, department) VALUES (?, ?, ?)', [boardName, company || DEFAULT_COMPANY, department]);
         const boardId = result.insertId;
         const templateColumns = [
             ['Ice Breaker', 0],
@@ -1142,7 +1147,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
         }
         const finalDept = (department && VALID_DEPARTMENTS.includes(department)) ? department : 'QA';
         const finalLead = (role === 'admin' || role === 'master' || skipLead) ? null : (lead || null);
-        const finalCompany = String(company || inviteRecord?.board_company || 'OpenEye').trim();
+        const finalCompany = String(company || inviteRecord?.board_company || DEFAULT_COMPANY).trim();
 
         // For master-initiated adds: use provided name or derive from email
         const first_name = isMasterAdd ? (firstName ? firstName.trim() : emailLower.split('@')[0]) : firstName.trim();
@@ -1382,7 +1387,7 @@ app.get('/api/users', authMiddleware, async (req, res) => {
     if (!req.user.is_master && !req.user.is_admin) return res.status(403).json({ error: 'Access denied' });
     try {
         const selectedCompany = String(req.query?.company || '').trim();
-        const companyScope = selectedCompany || req.user.company || 'OpenEye';
+        const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
         if (req.user.is_master) {
             const [rows] = await pool.query(
                 'SELECT id, username, first_name, last_name, display_name, email, company, department, `lead`, is_admin, is_master, role_key, created_at FROM users WHERE company = ? ORDER BY department, `lead`, display_name',
@@ -1393,7 +1398,7 @@ app.get('/api/users', authMiddleware, async (req, res) => {
         // Admins/Leads: only return users on their team (matching lead = their display_name)
         const [rows] = await pool.query(
             'SELECT id, username, first_name, last_name, display_name, email, company, department, `lead`, is_admin, is_master, role_key, created_at FROM users WHERE company = ? ORDER BY display_name',
-            [req.user.company || 'OpenEye']
+            [req.user.company || DEFAULT_COMPANY]
         );
         res.json(rows);
     } catch (error) {
@@ -1408,7 +1413,7 @@ app.get('/api/users/department/:dept', authMiddleware, async (req, res) => {
     try {
         const [rows] = await pool.query(
             'SELECT id, display_name FROM users WHERE department = ? AND company = ? ORDER BY display_name',
-            [dept, req.user.company || 'OpenEye']
+            [dept, req.user.company || DEFAULT_COMPANY]
         );
         res.json(rows);
     } catch (error) {
@@ -1481,7 +1486,7 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
                     const boardName = `Retro - ${display_name}`;
                     const [existing] = await pool.query('SELECT id FROM boards WHERE name = ?', [boardName]);
                     if (existing.length === 0) {
-                        await createDefaultAdminBoard(first_name, last_name, req.user.company || 'OpenEye', userDept || 'QA', parseInt(userId));
+                        await createDefaultAdminBoard(first_name, last_name, req.user.company || DEFAULT_COMPANY, userDept || 'QA', parseInt(userId));
                     } else {
                         // Board exists — just make sure the user is a member
                         await pool.query('INSERT IGNORE INTO board_members (board_id, user_id) VALUES (?, ?)', [existing[0].id, parseInt(userId)]);
@@ -1687,8 +1692,8 @@ app.get('/api/role-labels', async (req, res) => {
 
         const selectedCompany = String(req.query?.company || '').trim();
         const companyScope = requester?.is_master
-            ? (selectedCompany || requester.company || 'OpenEye')
-            : (requester?.company || selectedCompany || 'OpenEye');
+            ? (selectedCompany || requester.company || DEFAULT_COMPANY)
+            : (requester?.company || selectedCompany || DEFAULT_COMPANY);
 
         await pool.query(
             `INSERT IGNORE INTO role_labels (company, role_key, label)
@@ -1711,7 +1716,7 @@ app.put('/api/role-labels', authMiddleware, async (req, res) => {
     if (!labels || typeof labels !== 'object') return res.status(400).json({ error: 'labels object required' });
     try {
         const selectedCompany = String(req.query?.company || req.body?.company || '').trim();
-        const companyScope = selectedCompany || req.user.company || 'OpenEye';
+        const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
 
         for (const [key, value] of Object.entries(labels)) {
             if (typeof value !== 'string' || !value.trim()) continue;
@@ -1738,7 +1743,7 @@ app.post('/api/role-labels', authMiddleware, async (req, res) => {
     if (!key || !label.trim()) return res.status(400).json({ error: 'Invalid role_key or label' });
     try {
         const selectedCompany = String(req.query?.company || req.body?.company || '').trim();
-        const companyScope = selectedCompany || req.user.company || 'OpenEye';
+        const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
         await pool.query(
             `INSERT INTO role_labels (company, role_key, label)
              VALUES (?, ?, ?)
@@ -1759,7 +1764,7 @@ app.delete('/api/role-labels/:key', authMiddleware, async (req, res) => {
     }
     try {
         const selectedCompany = String(req.query?.company || '').trim();
-        const companyScope = selectedCompany || req.user.company || 'OpenEye';
+        const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
         await pool.query('DELETE FROM role_labels WHERE company = ? AND role_key = ?', [companyScope, key]);
         res.json({ success: true });
     } catch (error) {
@@ -1773,7 +1778,7 @@ app.get('/api/boards', authMiddleware, async (req, res) => {
     try {
         let boards;
         const selectedCompany = String(req.query?.company || '').trim();
-        const companyScope = selectedCompany || req.user.company || 'OpenEye';
+        const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
         if (req.user.is_master) {
             // Masters can select which company to view
             [boards] = await pool.query('SELECT * FROM boards WHERE company = ? ORDER BY created_at DESC', [companyScope]);
@@ -1784,7 +1789,7 @@ app.get('/api/boards', authMiddleware, async (req, res) => {
                  JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = ?
                  WHERE b.company = ?
                  ORDER BY b.created_at DESC`,
-                [req.user.id, req.user.company || 'OpenEye']
+                [req.user.id, req.user.company || DEFAULT_COMPANY]
             );
         }
         res.json(boards);
@@ -1801,7 +1806,7 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
         ? department
         : (VALID_DEPARTMENTS.includes(req.user.department) ? req.user.department : 'QA');
     try {
-        const [result] = await pool.query('INSERT INTO boards (name, company, department) VALUES (?, ?, ?)', [name.trim(), req.user.company || 'OpenEye', boardDept]);
+        const [result] = await pool.query('INSERT INTO boards (name, company, department) VALUES (?, ?, ?)', [name.trim(), req.user.company || DEFAULT_COMPANY, boardDept]);
         const insertId = result.insertId;
         const defaultColumns = template === 'template'
             ? [
@@ -1819,7 +1824,7 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
             await pool.query('INSERT INTO `columns` (board_id, name, position) VALUES (?, ?, ?)', [insertId, colName, pos]);
         }
 
-        const board = { id: insertId, name: name.trim(), company: req.user.company || 'OpenEye', department: boardDept };
+        const board = { id: insertId, name: name.trim(), company: req.user.company || DEFAULT_COMPANY, department: boardDept };
         // Auto-add the creating user as a board member
         await pool.query('INSERT IGNORE INTO board_members (board_id, user_id) VALUES (?, ?)', [insertId, req.user.id]);
         res.status(201).json(board);
@@ -1896,7 +1901,7 @@ app.get('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
              JOIN users u ON u.id = bm.user_id
              WHERE bm.board_id = ? AND u.company = ?
              ORDER BY u.display_name`,
-            [boardId, req.user.company || 'OpenEye']
+            [boardId, req.user.company || DEFAULT_COMPANY]
         );
         res.json(rows);
     } catch (error) {
@@ -1920,7 +1925,7 @@ app.post('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
         }
         const [userRows] = await pool.query('SELECT id, display_name, email, department FROM users WHERE id = ?', [userId]);
         if (userRows.length === 0) return res.status(404).json({ error: 'User not found' });
-        if ((userRows[0].company || 'OpenEye') !== (req.user.company || 'OpenEye')) {
+        if ((userRows[0].company || DEFAULT_COMPANY) !== (req.user.company || DEFAULT_COMPANY)) {
             return res.status(403).json({ error: 'You can only add users from your company' });
         }
         await pool.query('INSERT IGNORE INTO board_members (board_id, user_id, added_by) VALUES (?, ?, ?)', [boardId, userId, req.user.id]);
@@ -1977,7 +1982,7 @@ app.get('/api/boards/:boardId/users', authMiddleware, async (req, res) => {
              JOIN users u ON u.id = bm.user_id
              WHERE bm.board_id = ? AND u.company = ?
              ORDER BY u.is_master DESC, u.is_admin DESC, u.display_name`,
-            [boardId, req.user.company || 'OpenEye']
+            [boardId, req.user.company || DEFAULT_COMPANY]
         );
 
         const [pendingRows] = await pool.query(
@@ -1987,16 +1992,16 @@ app.get('/api/boards/:boardId/users', authMiddleware, async (req, res) => {
              LEFT JOIN users u ON u.id = bi.invitee_user_id
              WHERE bi.board_id = ? AND bi.status = 'PENDING'
              ORDER BY bi.created_at DESC`,
-            [req.user.company || 'OpenEye', boardId]
+            [req.user.company || DEFAULT_COMPANY, boardId]
         );
 
         const pendingUsers = pendingRows
-            .filter(p => (p.company || req.user.company || 'OpenEye') === (req.user.company || 'OpenEye'))
+            .filter(p => (p.company || req.user.company || DEFAULT_COMPANY) === (req.user.company || DEFAULT_COMPANY))
             .map((p, idx) => ({
                 id: `pending-${p.id}-${idx}`,
                 display_name: p.display_name || 'Pending User',
                 email: p.email || '',
-                company: p.company || req.user.company || 'OpenEye',
+                company: p.company || req.user.company || DEFAULT_COMPANY,
                 is_pending: 1,
                 invite_token: p.token,
                 is_admin: 0,
@@ -2196,7 +2201,7 @@ app.post('/api/boards/:boardId/invites', authMiddleware, async (req, res) => {
         if (inviteeUserId) {
             const [targetRows] = await pool.query('SELECT id, email, company FROM users WHERE id = ?', [inviteeUserId]);
             if (targetRows.length === 0) return res.status(404).json({ error: 'User not found' });
-            if ((targetRows[0].company || 'OpenEye') !== (req.user.company || 'OpenEye')) {
+            if ((targetRows[0].company || DEFAULT_COMPANY) !== (req.user.company || DEFAULT_COMPANY)) {
                 return res.status(403).json({ error: 'You can only invite users from your company' });
             }
             inviteeEmail = targetRows[0].email;
@@ -2315,7 +2320,7 @@ app.get('/api/invites/me/pending', authMiddleware, async (req, res) => {
                     OR (bi.invitee_email IS NOT NULL AND LOWER(bi.invitee_email) = LOWER(?))
                )
              ORDER BY bi.created_at DESC`,
-            [req.user.company || 'OpenEye', req.user.id, String(req.user.email || '')]
+            [req.user.company || DEFAULT_COMPANY, req.user.id, String(req.user.email || '')]
         );
         res.json(rows.map(r => ({
             id: r.id,
@@ -2357,7 +2362,7 @@ app.post('/api/invites/:token/respond', authMiddleware, async (req, res) => {
             return res.status(400).json({ error: 'Invite is expired' });
         }
 
-        if ((invite.board_company || 'OpenEye') !== (req.user.company || 'OpenEye')) {
+        if ((invite.board_company || DEFAULT_COMPANY) !== (req.user.company || DEFAULT_COMPANY)) {
             return res.status(403).json({ error: 'Invite is for a different company' });
         }
         if (invite.invitee_user_id && invite.invitee_user_id !== req.user.id) {
