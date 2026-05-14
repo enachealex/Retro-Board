@@ -1,6 +1,6 @@
 /* ===================================================
    Auth Pages — Login & Register
-   Matches the OpenEye Retro Board blue design system
+  Matches the RetroBoard blue design system
    =================================================== */
 
 .auth-screen {
@@ -33,6 +33,13 @@
   color: #00A3FF;
   font-size: 1.6rem;
   line-height: 1;
+}
+
+.auth-logo-image {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  display: block;
 }
 
 .auth-logo-text {

@@ -11,9 +11,9 @@ const emailTransporter = nodemailer.createTransport({
 async function sendWelcomeEmail(firstName, email) {
     try {
         await emailTransporter.sendMail({
-            from: process.env.SMTP_FROM || '"OpenEye Retro Board" <retro-board@openeye.net>',
+            from: process.env.SMTP_FROM || '"RetroBoard" <noreply@thejumpvault.com>',
             to: email,
-            subject: 'Welcome to OpenEye Retro Board!',
+            subject: 'Welcome to RetroBoard!',
             html: `
 <!DOCTYPE html>
 <html>
@@ -22,7 +22,7 @@ async function sendWelcomeEmail(firstName, email) {
   <tr><td align="center">
     <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
       <tr><td style="background:#001489;padding:28px 36px;">
-        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; OpenEye Retro Board</span>
+        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; RetroBoard</span>
       </td></tr>
       <tr><td style="padding:36px;">
         <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Welcome, ${firstName}!</h1>
@@ -31,7 +31,7 @@ async function sendWelcomeEmail(firstName, email) {
         <p style="color:#888;font-size:13px;margin:0;">If you didn't create this account, please contact your team administrator.</p>
       </td></tr>
       <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-        <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} OpenEye Networks. All rights reserved.</span>
+        <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span>
       </td></tr>
     </table>
   </td></tr>

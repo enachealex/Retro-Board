@@ -33,15 +33,15 @@ try {
     cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 10);
     
     const attrs = [
-        { name: 'commonName', value: 'OpenEye Retro Board' },
-        { name: 'organizationName', value: 'OpenEye Networks' }
+        { name: 'commonName', value: 'RetroBoard' },
+        { name: 'organizationName', value: 'The Jump Vault' }
     ];
     cert.setSubject(attrs);
     cert.setIssuer(attrs);
     
     cert.setExtensions([
         { name: 'subjectAltName', altNames: [
-            { type: 7, ip: '172.30.40.72' },
+            { type: 7, ip: '192.168.1.48' },
             { type: 7, ip: '127.0.0.1' },
             { type: 2, value: 'localhost' }
         ]},
@@ -61,7 +61,7 @@ try {
     console.log('  - server.key  (private key)');
     console.log('  - server.cert (certificate)');
     console.log('  - Valid for 10 years');
-    console.log('  - SANs: 172.30.40.72, 127.0.0.1, localhost');
+    console.log('  - SANs: 192.168.1.48, 127.0.0.1, localhost');
 } catch (err) {
     console.error('Failed to generate certificate:', err.message);
     console.log('Please install node-forge: npm install node-forge');

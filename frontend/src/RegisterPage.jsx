@@ -111,8 +111,12 @@ export default function RegisterPage({ onGoToLogin }) {
     <div className="auth-screen">
       <div className="auth-card">
         <div className="auth-logo">
-          <span className="auth-logo-icon">&#9646;</span>
-          <span className="auth-logo-text">OpenEye Retro Board</span>
+          <img
+            className="auth-logo-image"
+            src="/vault-jump.png"
+            alt="Vault Jump Retro logo"
+          />
+          <span className="auth-logo-text">Vault Jump Retro</span>
         </div>
         <h2 className="auth-title">Create your account</h2>
         <p className="auth-subtitle">{inviteToken ? "Join your board from an invite link" : "Create your Retro Boards account"}</p>
@@ -168,7 +172,7 @@ export default function RegisterPage({ onGoToLogin }) {
               id="reg-email"
               type="email"
               autoComplete="email"
-              placeholder="your@openeye.net"
+              placeholder="name@example.com"
               value={email}
               onChange={(e) => { setEmail(e.target.value); clearErrors(); }}
               disabled={authLoading}

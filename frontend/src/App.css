@@ -59,7 +59,7 @@ body.dark-theme {
 /* Sidebar Styles */
 .sidebar {
   width: 250px;
-  background-color: #001489; /* OpenEye Deep Blue */
+  background-color: #001489; /* Brand deep blue */
   border-right: none;
   display: flex;
   flex-direction: row;
@@ -162,35 +162,59 @@ body.dark-theme .sidebar-collapsed:hover {
   font-size: 0.8rem;
   color: #8aa8d8;
   min-width: 58px;
+  font-weight: 600;
 }
 
 .sidebar-company-filter-select {
   flex: 1;
   min-width: 0;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 20, 50, 0.6);
   color: #d9e6ff;
-  border: 1px solid rgba(138, 168, 216, 0.35);
-  border-radius: 8px;
-  padding: 6px 8px;
+  border: 1px solid rgba(138, 168, 216, 0.4);
+  border-radius: 6px;
+  padding: 6px 10px;
   font-size: 0.85rem;
+  font-weight: 500;
   outline: none;
   cursor: pointer;
-  appearance: auto;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: all 0.15s ease-out;
 }
 
 .sidebar-company-filter-select:focus {
   border-color: #00A3FF;
-  box-shadow: 0 0 0 2px rgba(0, 163, 255, 0.25);
+  box-shadow: 0 0 0 3px rgba(0, 163, 255, 0.2), inset 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-.sidebar-company-filter-select:hover {
+.sidebar-company-filter-select:hover:not(:focus) {
   border-color: rgba(138, 168, 216, 0.65);
+  background: rgba(0, 30, 70, 0.7);
 }
 
 .sidebar-company-filter-select option {
   background: #0a1a4a;
   color: #d9e6ff;
+  padding: 6px;
+}
+
+body.dark-theme .sidebar-company-filter-select {
+  background: rgba(0, 10, 30, 0.7);
+  color: #c8d9ff;
+  border-color: rgba(138, 168, 216, 0.3);
+}
+
+body.dark-theme .sidebar-company-filter-select:focus {
+  border-color: #00A3FF;
+  box-shadow: 0 0 0 3px rgba(0, 163, 255, 0.15), inset 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+body.dark-theme .sidebar-company-filter-select:hover:not(:focus) {
+  border-color: rgba(138, 168, 216, 0.55);
+  background: rgba(0, 15, 40, 0.8);
+}
+
+body.dark-theme .sidebar-company-filter-select option {
+  background: #0a1a4a;
+  color: #c8d9ff;
 }
 
 .font-size-wrapper {
@@ -233,7 +257,7 @@ body.dark-theme .font-slider-popup {
 
 .sidebar h2 {
   font-size: 1.2rem;
-  color: #ffffff; /* OpenEye Text */
+  color: #ffffff; /* Brand text */
 }
 
 .sidebar-header {
@@ -245,7 +269,7 @@ body.dark-theme .font-slider-popup {
 }
 
 .add-board-btn {
-  background-color: #00A3FF; /* OpenEye Cyan */
+  background-color: #00A3FF; /* Brand cyan */
   border: none;
   border-radius: 4px;
   width: 28px;
@@ -320,7 +344,7 @@ body.dark-theme .font-slider-popup {
   border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.2s;
-  color: #ffffff; /* OpenEye text on dark blue sidebar */
+  color: #ffffff; /* Text on dark blue sidebar */
 }
 
 .board-list li:hover {
@@ -329,7 +353,7 @@ body.dark-theme .font-slider-popup {
 
 .board-list li.active {
   box-shadow: inset 0 0 0 2px #00A3FF;
-  color: #00A3FF; /* Highlighted light blue matching OpenEye cloud */
+  color: #00A3FF; /* Highlighted light blue accent */
   font-weight: 600;
   background-color: rgba(0, 163, 255, 0.1); /* Subtle highlight bg */
 }
@@ -852,7 +876,7 @@ body.dark-theme .card-reaction-picker-item:hover {
 }
 
 .add-card-primary-btn {
-  background-color: #00A3FF; /* OpenEye Cyan */
+  background-color: #00A3FF; /* Brand cyan */
   color: white;
   border: none;
   border-radius: 4px;
@@ -2390,12 +2414,12 @@ body.dark-theme .board-users-role {
   position: fixed;
   z-index: 3000;
   background-color: #ffffff;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(9, 30, 66, 0.3);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15), 0 0 1px rgba(0, 0, 0, 0.1);
   min-width: 170px;
   max-height: calc(100vh - 16px);
   overflow-y: auto;
-  animation: contextFadeIn 0.12s ease-out;
+  animation: contextFadeIn 0.15s ease-out;
 }
 
 @keyframes contextFadeIn {
@@ -2410,15 +2434,16 @@ body.dark-theme .board-users-role {
   width: 100%;
   padding: 10px 16px;
   border: none;
+  border-left: 3px solid transparent;
   background: none;
   cursor: pointer;
   font-size: 0.9rem;
   color: #001489;
-  transition: background-color 0.15s;
+  transition: all 0.15s ease-out;
 }
 
 .context-menu button:hover {
-  background-color: #f0f1f4;
+  background-color: #f5f6f9;
 }
 
 .context-menu-label {
@@ -3839,34 +3864,47 @@ body.dark-theme .gif-library-item-delete {
 }
 
 .user-badge-role {
-  background: rgba(34, 197, 94, 0.18);
-  color: #4ade80;
-  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.4);
   font-size: 0.65rem;
   font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 8px;
+  padding: 2px 7px;
+  border-radius: 6px;
   text-transform: none;
   letter-spacing: 0;
+  display: inline-block;
+  transition: all 0.15s ease-out;
 }
 
 .context-menu-active {
-  color: #16a34a !important;
+  color: #15803d !important;
   font-weight: 600;
-  background-color: rgba(22, 163, 74, 0.08) !important;
+  background-color: rgba(34, 197, 94, 0.12) !important;
+  border-left: 3px solid rgba(34, 197, 94, 0.5) !important;
+  padding-left: 13px !important;
 }
 
 .context-menu-active:hover {
-  background-color: rgba(22, 163, 74, 0.15) !important;
+  background-color: rgba(34, 197, 94, 0.2) !important;
+  border-left-color: rgba(34, 197, 94, 0.8) !important;
 }
 
 body.dark-theme .context-menu-active {
   color: #4ade80 !important;
-  background-color: rgba(74, 222, 128, 0.1) !important;
+  background-color: rgba(74, 222, 128, 0.12) !important;
+  border-left-color: rgba(74, 222, 128, 0.6) !important;
 }
 
 body.dark-theme .context-menu-active:hover {
-  background-color: rgba(74, 222, 128, 0.18) !important;
+  background-color: rgba(74, 222, 128, 0.2) !important;
+  border-left-color: rgba(74, 222, 128, 0.9) !important;
+}
+
+body.dark-theme .user-badge-role {
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+  border-color: rgba(74, 222, 128, 0.35);
 }
 
 .user-badge-lead {

@@ -41,6 +41,10 @@ function AuthGate() {
   const { isAuthenticated, token } = useAuth();
   const [view, setView] = useState('login'); // 'login' | 'register'
 
+  useEffect(() => {
+    document.title = 'Vault Jump Retro';
+  }, []);
+
   // Reveal the root div now that React has determined what to show
   useEffect(() => {
     const root = document.getElementById('root');

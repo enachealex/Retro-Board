@@ -2,13 +2,13 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 
 // Accept self-signed certificates only for our internal server
-const TRUSTED_HOSTS = ['172.30.40.72', 'localhost', '127.0.0.1'];
+const TRUSTED_HOSTS = ['192.168.1.48', 'localhost', '127.0.0.1'];
 
 function createWindow () {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: 'OpenEye Retro Board',
+    title: 'Vault Jump Retro',
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: true

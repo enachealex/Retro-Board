@@ -346,7 +346,7 @@ const CORS_ORIGINS = process.env.CORS_ORIGINS
       ? (() => { console.error('FATAL: CORS_ORIGINS must be set in production. Exiting.'); process.exit(1); })()
       : [
           'http://localhost:5173', 'http://localhost:5000', 'https://localhost:5443',
-          'http://172.30.40.72', 'http://172.30.40.72:5000', 'https://172.30.40.72:5443',
+          'http://192.168.1.48', 'http://192.168.1.48:5000', 'https://192.168.1.48:5443',
           'https://retroboard.thejumpvault.com', 'https://thejumpvault.com', 'https://www.thejumpvault.com',
         ];
 
@@ -474,6 +474,7 @@ async function seedDefaultGifs() {
 
 const initDb = async () => {
     try {
+        const defaultCompanySql = DEFAULT_COMPANY.replace(/'/g, "''");
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -482,7 +483,7 @@ const initDb = async () => {
                 last_name VARCHAR(100) NOT NULL DEFAULT '',
                 display_name VARCHAR(150) NOT NULL,
                 email VARCHAR(255) NOT NULL UNIQUE,
-                company VARCHAR(150) NOT NULL DEFAULT 'OpenEye',
+                company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}',
                 department ENUM('OWS', 'Apex') NOT NULL DEFAULT 'OWS',
                 \`lead\` VARCHAR(150) DEFAULT NULL,
                 is_admin TINYINT(1) NOT NULL DEFAULT 0,
@@ -494,7 +495,7 @@ const initDb = async () => {
         // Migrations for existing users table
         const userMigrations = [
             `ALTER TABLE users ADD COLUMN email VARCHAR(255) NOT NULL DEFAULT '' AFTER display_name`,
-            `ALTER TABLE users ADD COLUMN company VARCHAR(150) NOT NULL DEFAULT 'OpenEye' AFTER email`,
+            `ALTER TABLE users ADD COLUMN company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}' AFTER email`,
             `ALTER TABLE users ADD COLUMN department ENUM('OWS','Apex') NOT NULL DEFAULT 'OWS' AFTER email`,
             `ALTER TABLE users ADD COLUMN \`lead\` VARCHAR(150) DEFAULT NULL AFTER department`,
             `ALTER TABLE users ADD COLUMN is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER \`lead\``,
@@ -521,19 +522,19 @@ const initDb = async () => {
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        await pool.query(`INSERT IGNORE INTO companies (name) VALUES ('OpenEye')`);
+        await pool.query('INSERT IGNORE INTO companies (name) VALUES (?)', [DEFAULT_COMPANY]);
         await pool.query(`INSERT IGNORE INTO companies (name) SELECT DISTINCT company FROM users WHERE company IS NOT NULL AND company <> ''`);
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS boards (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
-                company VARCHAR(150) NOT NULL DEFAULT 'OpenEye',
+                company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}',
                 department ENUM('OWS', 'Apex') NOT NULL DEFAULT 'OWS',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        try { await pool.query(`ALTER TABLE boards ADD COLUMN company VARCHAR(150) NOT NULL DEFAULT 'OpenEye' AFTER name`); } catch (e) { /* column already exists */ }
+        try { await pool.query(`ALTER TABLE boards ADD COLUMN company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}' AFTER name`); } catch (e) { /* column already exists */ }
         // Migration for existing boards table
         try {
             await pool.query(`ALTER TABLE boards ADD COLUMN department ENUM('OWS','Apex') NOT NULL DEFAULT 'OWS' AFTER name`);
@@ -615,20 +616,20 @@ const initDb = async () => {
         await pool.query(`
             CREATE TABLE IF NOT EXISTS role_labels (
                 id INT AUTO_INCREMENT PRIMARY KEY,
-                company VARCHAR(150) NOT NULL DEFAULT 'OpenEye',
+                company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}',
                 role_key VARCHAR(50) NOT NULL,
                 label VARCHAR(100) NOT NULL,
                 UNIQUE KEY uniq_role_labels_company_role (company, role_key)
             )
         `);
-        try { await pool.query(`ALTER TABLE role_labels ADD COLUMN company VARCHAR(150) NOT NULL DEFAULT 'OpenEye' AFTER id`); } catch (e) { /* column already exists */ }
-        try { await pool.query(`UPDATE role_labels SET company = 'OpenEye' WHERE company IS NULL OR company = ''`); } catch (e) { /* ignore */ }
+        try { await pool.query(`ALTER TABLE role_labels ADD COLUMN company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}' AFTER id`); } catch (e) { /* column already exists */ }
+        try { await pool.query("UPDATE role_labels SET company = ? WHERE company IS NULL OR company = ''", [DEFAULT_COMPANY]); } catch (e) { /* ignore */ }
         try { await pool.query(`ALTER TABLE role_labels DROP INDEX role_key`); } catch (e) { /* old unique index may not exist */ }
         try { await pool.query(`ALTER TABLE role_labels ADD UNIQUE KEY uniq_role_labels_company_role (company, role_key)`); } catch (e) { /* unique key may already exist */ }
 
         // Seed defaults per company (INSERT IGNORE keeps existing customisations)
         const [companyRows] = await pool.query('SELECT name FROM companies ORDER BY name');
-        const roleLabelCompanies = companyRows.length > 0 ? companyRows.map(r => r.name) : ['OpenEye'];
+        const roleLabelCompanies = companyRows.length > 0 ? companyRows.map(r => r.name) : [DEFAULT_COMPANY];
         for (const companyName of roleLabelCompanies) {
             await pool.query(
                 `INSERT IGNORE INTO role_labels (company, role_key, label)

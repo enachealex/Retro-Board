@@ -2510,7 +2510,7 @@ const App = () => {
             <>
             <div className="sidebar-content">
             <div className="sidebar-header">
-              <h2>{sidebarPanel === "users" ? "Users" : "Retro Boards"}</h2>
+              <h2>{sidebarPanel === "users" ? "Users" : "Vault Jump Retro"}</h2>
               <div className="sidebar-actions">
                 <div className="font-size-wrapper">
                   <button
@@ -3396,7 +3396,7 @@ const App = () => {
                         <button onClick={openSettings}>
                           <Settings size={16} /> Settings
                         </button>
-                        <button onClick={() => { setIsProfileOpen(false); alert("RetroBoard v1.0\nBuilt with React + Vite"); }}>
+                        <button onClick={() => { setIsProfileOpen(false); alert("Vault Jump Retro v1.0\nBuilt with React + Vite"); }}>
                           <Info size={16} /> About
                         </button>
                         <hr className="profile-dropdown-divider" />
