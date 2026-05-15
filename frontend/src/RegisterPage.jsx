@@ -26,6 +26,7 @@ export default function RegisterPage({ onGoToLogin }) {
   const [localError, setLocalError] = useState(null);
   const [captcha, setCaptcha] = useState({ token: "", answer: "" });
   const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
+  const [securityStep, setSecurityStep] = useState(false);
 
   const error = localError || authError;
   const passwordsMatch = password === confirmPassword;
@@ -43,9 +44,7 @@ export default function RegisterPage({ onGoToLogin }) {
     !!company.trim() &&
     !!password &&
     !!confirmPassword &&
-    passwordsMatch &&
-    !!captcha.token &&
-    !!captcha.answer.trim();
+    passwordsMatch;
 
   const clearErrors = React.useCallback(() => { setLocalError(null); setAuthError(null); }, [setAuthError]);
   const handleCaptchaChange = React.useCallback((nextCaptcha) => {
@@ -120,6 +119,16 @@ export default function RegisterPage({ onGoToLogin }) {
       setLocalError("Passwords do not match.");
       return;
     }
+
+    setCaptcha({ token: "", answer: "" });
+    setCaptchaReloadKey((key) => key + 1);
+    setSecurityStep(true);
+  };
+
+  const handleSecuritySubmit = async (e) => {
+    e.preventDefault();
+    clearErrors();
+
     if (!captcha.token || !captcha.answer.trim()) {
       setLocalError("Complete the security check.");
       return;
@@ -128,6 +137,63 @@ export default function RegisterPage({ onGoToLogin }) {
     const success = await register(firstName.trim(), lastName.trim(), email.trim(), password, company.trim(), inviteToken, captcha);
     if (!success) setCaptchaReloadKey((key) => key + 1);
   };
+
+  const handleSecurityBack = () => {
+    setSecurityStep(false);
+    setCaptcha({ token: "", answer: "" });
+    clearErrors();
+  };
+
+  if (securityStep) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="auth-logo">
+            <img
+              className="auth-logo-image"
+              src="/vault-jump.png"
+              alt="Vault Jump Retro logo"
+            />
+            <span className="auth-logo-text">Vault Jump Retro</span>
+          </div>
+          <h2 className="auth-title">Security Check</h2>
+          <p className="auth-subtitle">Complete the check to create your account.</p>
+
+          <form className="auth-form" onSubmit={handleSecuritySubmit}>
+            {error && (
+              <div className="auth-error" role="alert">
+                {error}
+              </div>
+            )}
+
+            <CaptchaChallenge
+              value={captcha}
+              onChange={handleCaptchaChange}
+              disabled={authLoading}
+              reloadKey={captchaReloadKey}
+            />
+
+            <button
+              type="submit"
+              className="auth-btn-primary"
+              disabled={authLoading || !captcha.token || !captcha.answer.trim()}
+            >
+              {authLoading ? "Creating account…" : "Create Account"}
+            </button>
+
+            <button
+              type="button"
+              className="auth-btn-secondary"
+              onClick={handleSecurityBack}
+              disabled={authLoading}
+            >
+              Back
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="auth-screen">
@@ -280,19 +346,12 @@ export default function RegisterPage({ onGoToLogin }) {
             </div>
           </div>
 
-          <CaptchaChallenge
-            value={captcha}
-            onChange={handleCaptchaChange}
-            disabled={authLoading}
-            reloadKey={captchaReloadKey}
-          />
-
           <button
             type="submit"
             className="auth-btn-primary"
             disabled={!canSubmit}
           >
-            {authLoading ? "Creating account…" : "Create Account"}
+            Create Account
           </button>
         </form>
 

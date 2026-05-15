@@ -105,8 +105,8 @@
   transition: border-color 0.18s, box-shadow 0.18s;
   outline: none;
   width: 100%;
-  appearance: none;
   -webkit-appearance: none;
+  appearance: none;
 }
 
 /* Password field with reveal toggle */
@@ -199,6 +199,7 @@
   border: 1.5px solid #dfe1e6;
   border-radius: 8px;
   background: #f4f7fb;
+  -webkit-user-select: none;
   user-select: none;
 }
 
@@ -303,6 +304,31 @@
   cursor: not-allowed;
 }
 
+.auth-btn-secondary {
+  padding: 12px 13px;
+  background: #ffffff;
+  color: #001489;
+  border: 1.5px solid #dfe1e6;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.18s, box-shadow 0.18s, color 0.18s;
+}
+
+.auth-btn-secondary:hover:not(:disabled),
+.auth-btn-secondary:focus-visible {
+  border-color: #00A3FF;
+  box-shadow: 0 0 0 3px rgba(0, 163, 255, 0.18);
+  color: #0028b8;
+  outline: none;
+}
+
+.auth-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Switch prompt */
 .auth-switch {
   margin-top: 24px;
@@ -314,7 +340,7 @@
 .auth-link-btn {
   background: none;
   border: none;
-  color: #00A3FF;
+  color: #006bb8;
   font-size: inherit;
   font-weight: 600;
   cursor: pointer;
@@ -324,7 +350,7 @@
 }
 
 .auth-link-btn:hover:not(:disabled) {
-  color: #0082cc;
+  color: #001489;
 }
 
 .auth-link-btn:disabled {
@@ -337,7 +363,7 @@
    =================================================== */
 
 .profile-btn-admin-badge {
-  background: #00A3FF;
+  background: #006bb8;
   color: #fff;
   font-size: 0.65rem;
   font-weight: 700;
@@ -425,16 +451,20 @@ body.dark-theme .auth-card {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
 }
 
+body.dark-theme .auth-logo-text {
+  color: #e8eeff;
+}
+
 body.dark-theme .auth-title {
   color: #e8eeff;
 }
 
 body.dark-theme .auth-subtitle {
-  color: #a3b0cc;
+  color: #c5d1ea;
 }
 
 body.dark-theme .auth-field label {
-  color: #a3b0cc;
+  color: #c5d1ea;
 }
 
 body.dark-theme .auth-field input,
@@ -451,13 +481,33 @@ body.dark-theme .auth-select:focus {
 }
 
 body.dark-theme .auth-switch {
-  color: #a3b0cc;
+  color: #c5d1ea;
+}
+
+body.dark-theme .auth-link-btn {
+  color: #7bc7ff;
+}
+
+body.dark-theme .auth-link-btn:hover:not(:disabled) {
+  color: #ffffff;
 }
 
 body.dark-theme .auth-error {
   background: #3a1a1a;
   border-color: #ff5630;
   color: #ff8c6b;
+}
+
+body.dark-theme .auth-btn-secondary {
+  background: #232840;
+  border-color: #333a5a;
+  color: #e8eeff;
+}
+
+body.dark-theme .auth-btn-secondary:hover:not(:disabled),
+body.dark-theme .auth-btn-secondary:focus-visible {
+  border-color: #00A3FF;
+  color: #ffffff;
 }
 
 body.dark-theme .profile-dept-badge {
