@@ -73,10 +73,24 @@ function Write-Log($msg) {
     Write-Host $line
 }
 
-function Get-LatestSha {
-    $headers = @{Accept = "application/vnd.github+json"}
+function New-GitHubHeaders {
+    $headers = @{
+        Accept = "application/vnd.github+json"
+        "User-Agent" = "RetroBoardDeploy"
+    }
     if ($GITHUB_TOKEN) { $headers.Authorization = "token $GITHUB_TOKEN" }
-    $r = Invoke-RestMethod -Uri "https://api.github.com/repos/$REPO/commits/$BRANCH" -Headers $headers
+    return $headers
+}
+
+function Test-BackendRuntimeConfig {
+    if ($env:JWT_SECRET) { return $true }
+    $envPath = Join-Path $BACKEND_DIR ".env"
+    if (-not (Test-Path $envPath)) { return $false }
+    return [bool](Select-String -Path $envPath -Pattern '^\s*JWT_SECRET\s*=\s*.+' -Quiet)
+}
+
+function Get-LatestSha {
+    $r = Invoke-RestMethod -Uri "https://api.github.com/repos/$REPO/commits/$BRANCH" -Headers (New-GitHubHeaders)
     return $r.sha
 }
 
@@ -90,8 +104,6 @@ function Save-DeployedSha($sha) {
 }
 
 function Download-Repo($sha) {
-    $headers = @{}
-    if ($GITHUB_TOKEN) { $headers.Authorization = "token $GITHUB_TOKEN" }
     $zipPath = "$WORK_DIR\repo.zip"
     $extractDir = "$WORK_DIR\extract"
 
@@ -99,7 +111,7 @@ function Download-Repo($sha) {
     New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
 
     Write-Log "Downloading repo ZIP for $($sha.Substring(0,8))..."
-    Invoke-WebRequest -Uri "https://api.github.com/repos/$REPO/zipball/$BRANCH" -Headers $headers -OutFile $zipPath -UseBasicParsing
+    Invoke-WebRequest -Uri "https://api.github.com/repos/$REPO/zipball/$BRANCH" -Headers (New-GitHubHeaders) -OutFile $zipPath -UseBasicParsing
 
     Write-Log "Extracting..."
     Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
@@ -199,6 +211,10 @@ function Deploy-Backend($repoRoot) {
     }
 
     Write-Log "Backend changed, updating..."
+    New-Item -ItemType Directory -Path $BACKEND_DIR -Force | Out-Null
+    if (-not (Test-BackendRuntimeConfig)) {
+        throw "Backend runtime config missing: set JWT_SECRET in the service environment or in $BACKEND_DIR\.env before deploy."
+    }
 
     # Install backend deps
     Push-Location $srcBackend
