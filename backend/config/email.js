@@ -11,7 +11,7 @@ const emailTransporter = nodemailer.createTransport({
 async function sendWelcomeEmail(firstName, email) {
     try {
         await emailTransporter.sendMail({
-            from: process.env.SMTP_FROM || '"RetroBoard" <noreply@thejumpvault.com>',
+            from: process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>',
             to: email,
             subject: 'Welcome to RetroBoard!',
             html: `
