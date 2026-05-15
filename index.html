@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/vault-jump.png" />
+    <link rel="shortcut icon" type="image/png" href="/vault-jump.png" />
+    <link rel="apple-touch-icon" href="/vault-jump.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vault Jump Retro</title>
+    <script type="module" crossorigin src="/assets/index-D0-RMuKQ.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CAQvz6y5.css">
+  </head>
+  <body>
+    <script>
+      // Apply saved theme immediately to prevent any flash
+      (function() {
+        var isDark = localStorage.getItem("retro_board_theme") === "dark";
+        if (isDark) {
+          document.body.classList.add("dark-theme");
+          document.body.style.backgroundColor = "#121212";
+          document.body.style.color = "#e0e0e0";
+        } else {
+          document.body.style.backgroundColor = "#f4f6fa";
+          document.body.style.color = "#1a1a2e";
+        }
+        // Fix corrupted retro_board_user key (was overwritten with plain email by older code)
+        try {
+          var u = localStorage.getItem("retro_board_user");
+          if (u && u.charAt(0) !== '{') {
+            localStorage.removeItem("retro_board_user");
+          }
+        } catch(e) {}
+        // Hide the root div until React hydrates to prevent any white/unstyled flash
+        var root = document.getElementById("root");
+        if (root) root.style.visibility = "hidden";
+      })();
+    </script>
+    <div id="root"></div>
+  </body>
+</html>
