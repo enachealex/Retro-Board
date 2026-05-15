@@ -23,13 +23,31 @@ const sslAvailable = fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH)
 const SSL_PORT = parseInt(process.env.SSL_PORT || '5443');
 
 // --- Email (nodemailer) ---
+const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
+const SMTP_SECURE = process.env.SMTP_SECURE
+    ? process.env.SMTP_SECURE === 'true'
+    : SMTP_PORT === 465;
+const SMTP_INSECURE_TLS = process.env.SMTP_INSECURE_TLS === 'true';
+const SMTP_REQUIRE_TLS = process.env.SMTP_REQUIRE_TLS === 'true';
+
 const emailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp-mail.outlook.com',
-    port: parseInt(process.env.SMTP_PORT || '587'),
-    secure: false,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
     auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
-    tls: { rejectUnauthorized: process.env.SMTP_INSECURE_TLS !== 'true' }
+    requireTLS: SMTP_REQUIRE_TLS,
+    tls: SMTP_INSECURE_TLS ? { rejectUnauthorized: false } : undefined
 });
+
+const PASSWORD_RESET_FALLBACK_KEY = String(process.env.PASSWORD_RESET_FALLBACK_KEY || '');
+
+function isValidFallbackKey(candidate) {
+    if (!PASSWORD_RESET_FALLBACK_KEY || !candidate) return false;
+    const expected = Buffer.from(PASSWORD_RESET_FALLBACK_KEY, 'utf8');
+    const provided = Buffer.from(String(candidate), 'utf8');
+    if (expected.length !== provided.length) return false;
+    return crypto.timingSafeEqual(expected, provided);
+}
 
 async function sendWelcomeEmail(firstName, email) {
     try {
@@ -102,7 +120,12 @@ async function sendPasswordResetEmail(email, resetUrl) {
                 });
                 console.log(`Password reset email sent to ${email}`);
         } catch (err) {
-                console.error('Failed to send password reset email:', err.message);
+            console.error('Failed to send password reset email:', {
+                message: err.message,
+                code: err.code,
+                command: err.command,
+                responseCode: err.responseCode,
+            });
                 throw err; // propagate so the caller can report the failure
         }
 }
@@ -342,6 +365,7 @@ let pool;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const REQUIRED_PUBLIC_ORIGINS = [
         'https://retroboard.thejumpvault.com',
+    'https://enachealex.github.io',
         'https://thejumpvault.com',
         'https://www.thejumpvault.com',
 ];
@@ -1284,6 +1308,7 @@ app.get('/api/companies', async (req, res) => {
 app.post('/api/auth/request-password-reset', authLimiter, async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ error: 'email is required' });
+    const fallbackKey = String(req.get('x-reset-fallback-key') || '');
 
     try {
         const [rows] = await pool.query('SELECT id, email FROM users WHERE email = ? LIMIT 1', [email]);
@@ -1304,6 +1329,14 @@ app.post('/api/auth/request-password-reset', authLimiter, async (req, res) => {
         try {
             await sendPasswordResetEmail(user.email, resetUrl);
         } catch {
+            if (isValidFallbackKey(fallbackKey)) {
+                return res.json({
+                    success: true,
+                    delivery: 'manual',
+                    resetToken: token,
+                    resetUrl,
+                });
+            }
             return res.status(502).json({ error: 'Failed to send reset email. Please check your SMTP configuration or try again later.' });
         }
         res.json({ success: true });

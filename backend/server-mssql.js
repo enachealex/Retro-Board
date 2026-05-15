@@ -251,6 +251,7 @@ let pool;
 // --- CORS ---
 const REQUIRED_PUBLIC_ORIGINS = [
     'https://retroboard.thejumpvault.com',
+    'https://enachealex.github.io',
     'https://thejumpvault.com',
     'https://www.thejumpvault.com',
 ];
