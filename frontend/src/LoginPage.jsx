@@ -6,6 +6,44 @@ import { getAuthUrl } from "./config";
 import CaptchaChallenge from "./CaptchaChallenge";
 import "./Auth.css";
 
+const SECURITY_SESSION_KEY = "retro_auth_security_session_v1";
+
+function createSecuritySessionProof(sourceProof) {
+  const id = globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return {
+    type: "landing-pads-session",
+    token: `landing-pads-session:${id}`,
+    answer: "complete",
+    rounds: Math.max(5, Number(sourceProof?.rounds || 0)),
+    completedAt: Date.now(),
+  };
+}
+
+function readSecuritySessionProof() {
+  try {
+    const stored = globalThis.sessionStorage?.getItem(SECURITY_SESSION_KEY);
+    if (!stored) return null;
+    const proof = JSON.parse(stored);
+    if (proof?.type !== "landing-pads-session" || proof?.answer !== "complete" || Number(proof?.rounds || 0) < 5 || !proof?.token) {
+      globalThis.sessionStorage?.removeItem(SECURITY_SESSION_KEY);
+      return null;
+    }
+    return proof;
+  } catch {
+    return null;
+  }
+}
+
+function storeSecuritySessionProof(proof) {
+  try {
+    globalThis.sessionStorage?.setItem(SECURITY_SESSION_KEY, JSON.stringify(proof));
+  } catch {
+    // Browser storage can be unavailable in private or restricted contexts.
+  }
+}
+
 export default function LoginPage({ onGoToRegister }) {
   const { login, completeLogin, authError, authLoading, setAuthError } = useAuth();
   const [email, setEmail] = useState("");
@@ -49,6 +87,16 @@ export default function LoginPage({ onGoToRegister }) {
     e.preventDefault();
     setAuthError(null);
     if (!email.trim() || !password) return;
+
+    const sessionProof = readSecuritySessionProof();
+    if (sessionProof) {
+      const result = await login(email.trim(), password, sessionProof);
+      if (result && typeof result === 'object' && result.password_weak) {
+        setForceUpdate({ token: result.token, user: result.user });
+      }
+      return;
+    }
+
     setCaptcha({ token: "", answer: "" });
     setCaptchaReloadKey((key) => key + 1);
     setSecurityStep(true);
@@ -60,11 +108,14 @@ export default function LoginPage({ onGoToRegister }) {
       setAuthError("Complete the security check.");
       return;
     }
-    const result = await login(email.trim(), password, captcha);
+    const sessionProof = createSecuritySessionProof(captcha);
+    storeSecuritySessionProof(sessionProof);
+    const result = await login(email.trim(), password, sessionProof);
     if (result && typeof result === 'object' && result.password_weak) {
       setForceUpdate({ token: result.token, user: result.user });
     } else if (!result) {
-      setCaptchaReloadKey((key) => key + 1);
+      setSecurityStep(false);
+      setCaptcha({ token: "", answer: "" });
     }
   };
 

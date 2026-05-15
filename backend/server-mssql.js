@@ -236,7 +236,7 @@ function cleanupLandingPadTokens(now = Date.now()) {
     }
 }
 
-function verifyLandingPadsOrThrow(captcha) {
+function verifyLandingPadsOrThrow(captcha, options = {}) {
     const token = String(captcha?.token || '');
     const answer = String(captcha?.answer || '').toLowerCase();
     const rounds = Number(captcha?.rounds || 0);
@@ -244,6 +244,15 @@ function verifyLandingPadsOrThrow(captcha) {
     const completedAt = Number(captcha?.completedAt || 0);
     const now = Date.now();
     cleanupLandingPadTokens(now);
+
+    if (captcha?.type === 'landing-pads-session') {
+        if (!options.allowSessionProof || answer !== 'complete' || rounds < LANDING_PADS_REQUIRED_STREAK || !/^landing-pads-session:[A-Za-z0-9._:-]{12,180}$/.test(token)) {
+            const err = new Error('Security check is required.');
+            err.status = 400;
+            throw err;
+        }
+        return;
+    }
 
     if (captcha?.type !== 'landing-pads' || answer !== 'complete' || rounds < LANDING_PADS_REQUIRED_STREAK) {
         const err = new Error('Security check is required.');
@@ -347,9 +356,9 @@ function createCaptchaChallenge() {
     return { token, image: renderCaptchaSvg(code), expiresAt, expiresInSeconds: Math.floor(CAPTCHA_TTL_MS / 1000) };
 }
 
-function verifyCaptchaOrThrow(captcha) {
-    if (captcha?.type === 'landing-pads') {
-        verifyLandingPadsOrThrow(captcha);
+function verifyCaptchaOrThrow(captcha, options = {}) {
+    if (captcha?.type === 'landing-pads' || captcha?.type === 'landing-pads-session') {
+        verifyLandingPadsOrThrow(captcha, options);
         return;
     }
 
@@ -1106,7 +1115,7 @@ app.post('/api/auth/login', async (req, res) => {
     const { email, password, captcha } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
     try {
-        verifyCaptchaOrThrow(captcha);
+        verifyCaptchaOrThrow(captcha, { allowSessionProof: true });
 
         const result = await pool.request()
             .input('email', sql.NVarChar(255), email.trim().toLowerCase())
