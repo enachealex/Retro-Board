@@ -24,7 +24,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem(USER_KEY, JSON.stringify(usr));
     setToken(tok);
     setUser(usr);
-  }, [persistAuth]);
+  }, []);
 
   const clearAuth = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
@@ -38,7 +38,7 @@ export function AuthProvider({ children }) {
     setToken(null);
     setUser(null);
     setAuthError(null);
-  }, [persistAuth]);
+  }, []);
 
   const refreshUser = useCallback(async () => {
     const storedToken = localStorage.getItem(TOKEN_KEY);
