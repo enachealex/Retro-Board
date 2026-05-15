@@ -30,8 +30,10 @@ CREATE TABLE boards (
     id INT IDENTITY(1,1) PRIMARY KEY,
     name NVARCHAR(255) NOT NULL,
     department NVARCHAR(10) NOT NULL DEFAULT 'QA',
+    owner_user_id INT NULL,
     bg_image NVARCHAR(MAX) NULL,
     created_at DATETIME2 DEFAULT GETDATE(),
+    CONSTRAINT FK_boards_owner FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL,
     CONSTRAINT CK_boards_department CHECK (department IN ('QA','SE','SDET'))
 );
 

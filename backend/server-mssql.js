@@ -183,6 +183,12 @@ function verifyJwt(token) {
         return jwt.verify(token, JWT_SECRET);
     } catch { return null; }
 }
+async function getCurrentUserForAuth(userId) {
+    const result = await pool.request()
+        .input('id', sql.Int, userId)
+        .query('SELECT id, username, first_name, last_name, display_name, email, department, [lead], is_admin, is_master, is_overlord FROM users WHERE id = @id');
+    return result.recordset[0] || null;
+}
 async function hashPassword(password) {
     const salt = crypto.randomBytes(16).toString('hex');
     return new Promise((resolve, reject) => {
@@ -205,16 +211,157 @@ async function verifyPassword(password, stored) {
         });
     });
 }
-function authMiddleware(req, res, next) {
+
+const CAPTCHA_TTL_MS = Number.parseInt(process.env.CAPTCHA_TTL_MS || '120000', 10);
+const CAPTCHA_LENGTH = 6;
+const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const usedCaptchaNonces = new Map();
+
+function cleanupCaptchaNonces(now = Date.now()) {
+    for (const [nonce, expiresAt] of usedCaptchaNonces.entries()) {
+        if (expiresAt <= now) usedCaptchaNonces.delete(nonce);
+    }
+}
+
+function normalizeCaptchaAnswer(answer) {
+    return String(answer || '').replace(/\s+/g, '').toUpperCase();
+}
+
+function createCaptchaCode() {
+    let code = '';
+    for (let i = 0; i < CAPTCHA_LENGTH; i++) {
+        code += CAPTCHA_CHARS[crypto.randomInt(0, CAPTCHA_CHARS.length)];
+    }
+    return code;
+}
+
+function createCaptchaAnswerHash(nonce, expiresAt, answer) {
+    return crypto
+        .createHmac('sha256', `${JWT_SECRET}:captcha-answer`)
+        .update(`${nonce}:${expiresAt}:${normalizeCaptchaAnswer(answer)}`)
+        .digest('base64url');
+}
+
+function signCaptchaPayload(payload) {
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto.createHmac('sha256', JWT_SECRET).update(body).digest('base64url');
+    return `${body}.${signature}`;
+}
+
+function parseCaptchaToken(token) {
+    const [body, signature] = String(token || '').split('.');
+    if (!body || !signature) return null;
+    const expected = crypto.createHmac('sha256', JWT_SECRET).update(body).digest('base64url');
+    const sigBuffer = Buffer.from(signature);
+    const expectedBuffer = Buffer.from(expected);
+    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) return null;
+    try {
+        return JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    } catch {
+        return null;
+    }
+}
+
+function renderCaptchaSvg(code) {
+    const width = 224;
+    const height = 78;
+    const chars = code.split('').map((char, index) => {
+        const x = 24 + index * 31 + crypto.randomInt(-3, 4);
+        const y = 48 + crypto.randomInt(-8, 9);
+        const rotation = crypto.randomInt(-18, 19);
+        const color = ['#001489', '#0b4f6c', '#5c2d91', '#1f7a5c'][crypto.randomInt(0, 4)];
+        return `<text x="${x}" y="${y}" transform="rotate(${rotation} ${x} ${y})" fill="${color}" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="800">${char}</text>`;
+    }).join('');
+    const lines = Array.from({ length: 10 }, () => {
+        const x1 = crypto.randomInt(0, width);
+        const y1 = crypto.randomInt(0, height);
+        const x2 = crypto.randomInt(0, width);
+        const y2 = crypto.randomInt(0, height);
+        const opacity = (crypto.randomInt(18, 42) / 100).toFixed(2);
+        return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#001489" stroke-width="1.4" opacity="${opacity}" />`;
+    }).join('');
+    const dots = Array.from({ length: 44 }, () => {
+        const cx = crypto.randomInt(0, width);
+        const cy = crypto.randomInt(0, height);
+        const radius = crypto.randomInt(1, 3);
+        const opacity = (crypto.randomInt(18, 48) / 100).toFixed(2);
+        return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="#00A3FF" opacity="${opacity}" />`;
+    }).join('');
+    const wave = `M 6 ${crypto.randomInt(30, 48)} C 54 ${crypto.randomInt(2, 28)}, 92 ${crypto.randomInt(54, 74)}, 132 ${crypto.randomInt(24, 52)} S 194 ${crypto.randomInt(8, 68)}, 218 ${crypto.randomInt(32, 56)}`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Security challenge"><rect width="100%" height="100%" rx="8" fill="#f4f7fb"/><path d="${wave}" fill="none" stroke="#ff8a00" stroke-width="3" opacity="0.55"/>${dots}${lines}${chars}</svg>`;
+    return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
+function createCaptchaChallenge() {
+    cleanupCaptchaNonces();
+    const code = createCaptchaCode();
+    const nonce = crypto.randomBytes(18).toString('base64url');
+    const expiresAt = Date.now() + CAPTCHA_TTL_MS;
+    const token = signCaptchaPayload({
+        v: 1,
+        nonce,
+        expiresAt,
+        answerHash: createCaptchaAnswerHash(nonce, expiresAt, code),
+    });
+    return { token, image: renderCaptchaSvg(code), expiresAt, expiresInSeconds: Math.floor(CAPTCHA_TTL_MS / 1000) };
+}
+
+function verifyCaptchaOrThrow(captcha) {
+    const token = captcha?.token;
+    const answer = normalizeCaptchaAnswer(captcha?.answer);
+    if (!token || !answer) {
+        const err = new Error('Security check is required.');
+        err.status = 400;
+        throw err;
+    }
+    const payload = parseCaptchaToken(token);
+    const now = Date.now();
+    cleanupCaptchaNonces(now);
+    if (!payload || payload.v !== 1 || !payload.nonce || !payload.expiresAt || !payload.answerHash) {
+        const err = new Error('Security check is invalid. Please reload it.');
+        err.status = 400;
+        throw err;
+    }
+    if (Number(payload.expiresAt) <= now) {
+        const err = new Error('Security check expired. Please reload it.');
+        err.status = 400;
+        throw err;
+    }
+    if (usedCaptchaNonces.has(payload.nonce)) {
+        const err = new Error('Security check was already used. Please reload it.');
+        err.status = 400;
+        throw err;
+    }
+    usedCaptchaNonces.set(payload.nonce, Number(payload.expiresAt));
+    const expected = createCaptchaAnswerHash(payload.nonce, payload.expiresAt, answer);
+    const expectedBuffer = Buffer.from(expected);
+    const actualBuffer = Buffer.from(payload.answerHash);
+    if (expectedBuffer.length !== actualBuffer.length || !crypto.timingSafeEqual(expectedBuffer, actualBuffer)) {
+        const err = new Error('Security check was incorrect. Please try a new one.');
+        err.status = 400;
+        throw err;
+    }
+}
+async function authMiddleware(req, res, next) {
     const authHeader = req.headers['authorization'];
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
     const payload = verifyJwt(authHeader.slice(7));
     if (!payload) return res.status(401).json({ error: 'Invalid or expired token' });
-    req.user = payload;
-    if (req.user.sub !== undefined && req.user.id === undefined) {
-        req.user.id = req.user.sub;
+
+    try {
+        const currentUser = await getCurrentUserForAuth(payload.sub);
+        if (!currentUser) return res.status(401).json({ error: 'User no longer exists' });
+        req.user = {
+            ...payload,
+            ...buildUserPublic(currentUser),
+            sub: currentUser.id,
+            id: currentUser.id,
+        };
+    } catch (error) {
+        console.error('Auth refresh error:', error);
+        return res.status(500).json({ error: 'Internal server error' });
     }
     next();
 }
@@ -409,6 +556,11 @@ const initDb = async () => {
                 ALTER TABLE master_emails ADD department NVARCHAR(10) NULL
         `);
 
+        await pool.request().query(`
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('boards') AND name = 'owner_user_id')
+                ALTER TABLE boards ADD owner_user_id INT NULL
+        `);
+
         // Create overlord_emails table if missing
         await pool.request().query(`
             IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'overlord_emails')
@@ -547,6 +699,21 @@ const initDb = async () => {
             }
         }
 
+        await pool.request().query(`
+            UPDATE b SET owner_user_id = u.id
+            FROM boards b
+            INNER JOIN users u ON b.name = CONCAT('Retro - ', u.display_name)
+            WHERE b.owner_user_id IS NULL
+        `);
+        await pool.request().query(`
+            UPDATE b SET owner_user_id = x.user_id
+            FROM boards b
+            CROSS APPLY (
+                SELECT TOP 1 bm.user_id FROM board_members bm WHERE bm.board_id = b.id ORDER BY bm.id ASC
+            ) x
+            WHERE b.owner_user_id IS NULL
+        `);
+
         console.log("Database initialized with Multi-board capability (MS SQL Server)");
 
         // Seed default GIFs in background
@@ -596,12 +763,56 @@ const broadcastBoardUpdate = async (boardId) => {
 
 const broadcastBoardsUpdate = async () => {
     try {
-        const result = await pool.request().query('SELECT id, name, department, bg_image, created_at FROM boards ORDER BY created_at DESC');
+        const result = await pool.request().query('SELECT id, name, department, owner_user_id, bg_image, created_at FROM boards ORDER BY created_at DESC');
         io.emit('boards:update', { boards: result.recordset });
     } catch (error) {
         console.error('Error broadcasting boards update:', error);
     }
 };
+
+async function getBoardForAuthMssql(boardId) {
+    const result = await pool.request().input('id', sql.Int, boardId).query('SELECT * FROM boards WHERE id = @id');
+    if (result.recordset.length === 0) {
+        const err = new Error('Board not found');
+        err.status = 404;
+        throw err;
+    }
+    return result.recordset[0];
+}
+
+function sameDepartmentForBoard(user, board) {
+    if (user.is_overlord) return true;
+    if (user.is_master) return (MASTER_DEPT_MAP[user.email] || user.department) === board.department;
+    return !board.department || board.department === user.department;
+}
+
+function isBoardOwnerMssql(user, board) {
+    return Number(board.owner_user_id) === Number(user.id || user.sub);
+}
+
+async function assertBoardAccessMssql(user, boardId) {
+    const board = await getBoardForAuthMssql(boardId);
+    if (user.is_overlord || (user.is_master && sameDepartmentForBoard(user, board))) return board;
+    if (user.is_admin || isBoardOwnerMssql(user, board)) return board;
+    const result = await pool.request()
+        .input('boardId', sql.Int, boardId)
+        .input('userId', sql.Int, user.id || user.sub)
+        .query('SELECT id FROM board_members WHERE board_id = @boardId AND user_id = @userId');
+    if (result.recordset.length === 0) {
+        const err = new Error('Access denied');
+        err.status = 403;
+        throw err;
+    }
+    return board;
+}
+
+async function assertBoardManagerMssql(user, boardId, message = 'Only board owners or admins can perform this action') {
+    const board = await getBoardForAuthMssql(boardId);
+    if (user.is_overlord || (user.is_master && sameDepartmentForBoard(user, board)) || user.is_admin || isBoardOwnerMssql(user, board)) return board;
+    const err = new Error(message);
+    err.status = 403;
+    throw err;
+}
 
 // Track connected sockets by userId
 const userSockets = new Map();
@@ -632,7 +843,8 @@ async function createDefaultAdminBoard(firstName, lastName, department, userId) 
         const insertResult = await pool.request()
             .input('name', sql.NVarChar(255), boardName)
             .input('dept', sql.NVarChar(10), department)
-            .query('INSERT INTO boards (name, department) OUTPUT INSERTED.id VALUES (@name, @dept)');
+            .input('ownerUserId', sql.Int, userId || null)
+            .query('INSERT INTO boards (name, department, owner_user_id) OUTPUT INSERTED.id VALUES (@name, @dept, @ownerUserId)');
         const boardId = insertResult.recordset[0].id;
         const templateColumns = [
             ['Ice Breaker', 0],
@@ -667,8 +879,13 @@ async function createDefaultAdminBoard(firstName, lastName, department, userId) 
 // AUTH ROUTES
 // =====================================================================
 
+app.get('/api/auth/captcha', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(createCaptchaChallenge());
+});
+
 app.post('/api/auth/register', async (req, res) => {
-    const { firstName, lastName, email, password, department, lead, role } = req.body;
+    const { firstName, lastName, email, password, department, lead, role, captcha } = req.body;
     const emailLower = (email || '').toLowerCase();
     const isMasterEmail = MASTER_EMAILS.includes(emailLower);
     const isOverlordEmail = OVERLORD_EMAILS.includes(emailLower);
@@ -718,6 +935,8 @@ app.post('/api/auth/register', async (req, res) => {
     }
 
     try {
+        if (!isMasterAdd) verifyCaptchaOrThrow(captcha);
+
         const existResult = await pool.request()
             .input('email', sql.NVarChar(255), emailLower)
             .query('SELECT id, password_hash FROM users WHERE email = @email');
@@ -831,15 +1050,18 @@ app.post('/api/auth/register', async (req, res) => {
         sendWelcomeEmail(first_name, emailLower);
         res.status(201).json({ token, user: buildUserPublic(newUser) });
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         console.error('Register error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
 app.post('/api/auth/login', async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, captcha } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
     try {
+        verifyCaptchaOrThrow(captcha);
+
         const result = await pool.request()
             .input('email', sql.NVarChar(255), email.trim().toLowerCase())
             .query('SELECT * FROM users WHERE email = @email');
@@ -868,13 +1090,14 @@ app.post('/api/auth/login', async (req, res) => {
         const password_weak = typeof password === 'string' && password.length < 6;
         res.json({ token, user: buildUserPublic(user), password_weak });
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         console.error('Login error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
 app.get('/api/auth/me', authMiddleware, (req, res) => {
-    res.json({ user: { id: req.user.sub, username: req.user.username, first_name: req.user.first_name, last_name: req.user.last_name, display_name: req.user.display_name, email: req.user.email, department: req.user.department, lead: req.user.lead || null, is_admin: req.user.is_admin, is_master: req.user.is_master || false, is_overlord: req.user.is_overlord || false } });
+    res.json({ user: buildUserPublic(req.user) });
 });
 
 app.patch('/api/auth/profile', authMiddleware, async (req, res) => {
@@ -891,7 +1114,10 @@ app.patch('/api/auth/profile', authMiddleware, async (req, res) => {
         const result = await pool.request().input('id', sql.Int, req.user.sub).query('SELECT * FROM users WHERE id = @id');
         const token = buildUserToken(result.recordset[0]);
         res.json({ token, user: buildUserPublic(result.recordset[0]) });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.patch('/api/auth/password', authMiddleware, async (req, res) => {
@@ -983,11 +1209,24 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
         if (parseInt(userId) === req.user.sub) return res.status(400).json({ error: 'You cannot change your own master status' });
         const val = is_master ? 1 : 0;
         try {
+            const userResult = await pool.request()
+                .input('id', sql.Int, userId)
+                .query('SELECT email, department FROM users WHERE id = @id');
+            if (userResult.recordset.length === 0) return res.status(404).json({ error: 'User not found' });
+            const { email: userEmail, department: userDept } = userResult.recordset[0];
             if (val === 1) {
                 await pool.request().input('id', sql.Int, userId).query('UPDATE users SET is_master = 1, is_admin = 0 WHERE id = @id');
+                await pool.request()
+                    .input('email', sql.NVarChar(255), userEmail)
+                    .input('dept', sql.NVarChar(10), userDept || 'QA')
+                    .query(`IF NOT EXISTS (SELECT 1 FROM master_emails WHERE email = @email) INSERT INTO master_emails (email, department) VALUES (@email, @dept)`);
             } else {
                 await pool.request().input('id', sql.Int, userId).query('UPDATE users SET is_master = 0 WHERE id = @id');
+                await pool.request()
+                    .input('email', sql.NVarChar(255), userEmail)
+                    .query('DELETE FROM master_emails WHERE email = @email');
             }
+            await reloadMasterEmails();
             res.json({ success: true });
         } catch (error) { res.status(500).json({ error: error.message }); }
         return;
@@ -1313,10 +1552,19 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
         ? department
         : (VALID_DEPARTMENTS.includes(req.user.department) ? req.user.department : 'QA');
     try {
+        if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord) {
+            const ownedResult = await pool.request()
+                .input('userId', sql.Int, req.user.id)
+                .query('SELECT COUNT(*) AS count FROM boards WHERE owner_user_id = @userId');
+            if (ownedResult.recordset[0].count >= 3) {
+                return res.status(403).json({ error: 'Basic users can create up to 3 boards.' });
+            }
+        }
         const insertResult = await pool.request()
             .input('name', sql.NVarChar(255), name.trim())
             .input('dept', sql.NVarChar(10), boardDept)
-            .query('INSERT INTO boards (name, department) OUTPUT INSERTED.id VALUES (@name, @dept)');
+            .input('ownerUserId', sql.Int, req.user.id)
+            .query('INSERT INTO boards (name, department, owner_user_id) OUTPUT INSERTED.id VALUES (@name, @dept, @ownerUserId)');
         const insertId = insertResult.recordset[0].id;
         const defaultColumns = template === 'template'
             ? [['Ice Breaker', 0], ['Needs Improvements', 1], ['Went Well', 2], ['Action Items', 3]]
@@ -1333,7 +1581,7 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
             .input('userId', sql.Int, req.user.id)
             .query(`IF NOT EXISTS (SELECT 1 FROM board_members WHERE board_id = @boardId AND user_id = @userId)
                     INSERT INTO board_members (board_id, user_id) VALUES (@boardId, @userId)`);
-        res.status(201).json({ id: insertId, name: name.trim(), department: boardDept });
+        res.status(201).json({ id: insertId, name: name.trim(), department: boardDept, owner_user_id: req.user.id });
         broadcastBoardsUpdate();
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -1342,13 +1590,7 @@ app.put('/api/boards/:id', authMiddleware, async (req, res) => {
     const { name } = req.body;
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
     try {
-        const boardResult = await pool.request().input('id', sql.Int, req.params.id).query('SELECT * FROM boards WHERE id = @id');
-        if (boardResult.recordset.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_overlord && !req.user.is_master && !req.user.is_admin) {
-            const mem = await pool.request().input('boardId', sql.Int, req.params.id).input('userId', sql.Int, req.user.id)
-                .query('SELECT id FROM board_members WHERE board_id = @boardId AND user_id = @userId');
-            if (mem.recordset.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardManagerMssql(req.user, req.params.id, 'Only board owners or admins can rename boards');
         await pool.request().input('name', sql.NVarChar(255), name.trim()).input('id', sql.Int, req.params.id)
             .query('UPDATE boards SET name = @name WHERE id = @id');
         res.json({ success: true, id: Number(req.params.id), name: name.trim() });
@@ -1357,13 +1599,8 @@ app.put('/api/boards/:id', authMiddleware, async (req, res) => {
 });
 
 app.delete('/api/boards/:id', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord) return res.status(403).json({ error: 'Only admins can delete boards' });
     try {
-        if (!req.user.is_overlord && !req.user.is_master && !req.user.is_admin) {
-            const mem = await pool.request().input('boardId', sql.Int, req.params.id).input('userId', sql.Int, req.user.id)
-                .query('SELECT id FROM board_members WHERE board_id = @boardId AND user_id = @userId');
-            if (mem.recordset.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardManagerMssql(req.user, req.params.id, 'Only board owners or admins can delete boards');
         await pool.request().input('id', sql.Int, req.params.id).query('DELETE FROM boards WHERE id = @id');
         res.json({ success: true });
         broadcastBoardsUpdate();
@@ -1373,14 +1610,7 @@ app.delete('/api/boards/:id', authMiddleware, async (req, res) => {
 app.put('/api/boards/:id/bg', authMiddleware, async (req, res) => {
     const { bg_image } = req.body;
     try {
-        const boardResult = await pool.request().input('id', sql.Int, req.params.id).query('SELECT * FROM boards WHERE id = @id');
-        if (boardResult.recordset.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_overlord && !req.user.is_master) {
-            if (!req.user.is_admin) return res.status(403).json({ error: 'Access denied' });
-            const mem = await pool.request().input('boardId', sql.Int, req.params.id).input('userId', sql.Int, req.user.id)
-                .query('SELECT id FROM board_members WHERE board_id = @boardId AND user_id = @userId');
-            if (mem.recordset.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardManagerMssql(req.user, req.params.id, 'Only board owners or admins can change the board background');
         const value = bg_image && typeof bg_image === 'string' ? bg_image.trim() : null;
         await pool.request().input('bg', sql.NVarChar(sql.MAX), value).input('id', sql.Int, req.params.id)
             .query('UPDATE boards SET bg_image = @bg WHERE id = @id');
@@ -1405,21 +1635,17 @@ app.get('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
 });
 
 app.post('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord) return res.status(403).json({ error: 'Only admins can manage board members' });
     const { boardId } = req.params;
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: 'userId is required' });
     try {
-        const boardResult = await pool.request().input('id', sql.Int, boardId).query('SELECT * FROM boards WHERE id = @id');
-        if (boardResult.recordset.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_overlord && !req.user.is_master && !req.user.is_admin) {
-            const mem = await pool.request().input('boardId', sql.Int, boardId).input('userId', sql.Int, req.user.id)
-                .query('SELECT id FROM board_members WHERE board_id = @boardId AND user_id = @userId');
-            if (mem.recordset.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        const board = await assertBoardManagerMssql(req.user, boardId, 'Only board owners or admins can manage board members');
         const userResult = await pool.request().input('id', sql.Int, userId)
             .query('SELECT id, display_name, email, department FROM users WHERE id = @id');
         if (userResult.recordset.length === 0) return res.status(404).json({ error: 'User not found' });
+        if (board.department && userResult.recordset[0].department !== board.department) {
+            return res.status(403).json({ error: 'You can only add users from your department' });
+        }
         await pool.request()
             .input('boardId', sql.Int, boardId)
             .input('userId', sql.Int, userId)
@@ -1434,16 +1660,10 @@ app.post('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
 });
 
 app.delete('/api/boards/:boardId/members/:userId', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord) return res.status(403).json({ error: 'Only admins can manage board members' });
     const { boardId, userId } = req.params;
     try {
-        const boardResult = await pool.request().input('id', sql.Int, boardId).query('SELECT * FROM boards WHERE id = @id');
-        if (boardResult.recordset.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_overlord && !req.user.is_master && !req.user.is_admin) {
-            const mem = await pool.request().input('boardId', sql.Int, boardId).input('userId', sql.Int, req.user.id)
-                .query('SELECT id FROM board_members WHERE board_id = @boardId AND user_id = @userId');
-            if (mem.recordset.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        const board = await assertBoardManagerMssql(req.user, boardId, 'Only board owners or admins can manage board members');
+        if (Number(userId) === Number(board.owner_user_id)) return res.status(400).json({ error: 'Board owners cannot be removed from their own board' });
         await pool.request().input('boardId', sql.Int, boardId).input('userId', sql.Int, userId)
             .query('DELETE FROM board_members WHERE board_id = @boardId AND user_id = @userId');
         res.json({ success: true });
@@ -1504,17 +1724,10 @@ app.post('/api/boards/:id/bg-upload', authMiddleware, multer({ storage: multer.d
 }), limits: { fileSize: 20 * 1024 * 1024 }, fileFilter: (req, file, cb) => {
     cb(null, /image\//.test(file.mimetype));
 }}).single('bg'), async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord) return res.status(403).json({ error: 'Access denied' });
     if (!req.file) return res.status(400).json({ error: 'No image provided' });
     const url = `/uploads/${req.file.filename}`;
     try {
-        const boardResult = await pool.request().input('id', sql.Int, req.params.id).query('SELECT * FROM boards WHERE id = @id');
-        if (boardResult.recordset.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_overlord && !req.user.is_master) {
-            const mem = await pool.request().input('boardId', sql.Int, req.params.id).input('userId', sql.Int, req.user.id)
-                .query('SELECT id FROM board_members WHERE board_id = @boardId AND user_id = @userId');
-            if (mem.recordset.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardManagerMssql(req.user, req.params.id, 'Only board owners or admins can change the board background');
         await pool.request().input('bg', sql.NVarChar(sql.MAX), url).input('id', sql.Int, req.params.id)
             .query('UPDATE boards SET bg_image = @bg WHERE id = @id');
         res.json({ success: true, url });
@@ -1525,13 +1738,7 @@ app.post('/api/boards/:id/bg-upload', authMiddleware, multer({ storage: multer.d
 app.get('/api/boards/:boardId', authMiddleware, async (req, res) => {
     const { boardId } = req.params;
     try {
-        const boardResult = await pool.request().input('id', sql.Int, boardId).query('SELECT * FROM boards WHERE id = @id');
-        if (boardResult.recordset.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_overlord && !req.user.is_master && !req.user.is_admin) {
-            const mem = await pool.request().input('boardId', sql.Int, boardId).input('userId', sql.Int, req.user.id)
-                .query('SELECT id FROM board_members WHERE board_id = @boardId AND user_id = @userId');
-            if (mem.recordset.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardAccessMssql(req.user, boardId);
         const colResult = await pool.request().input('boardId', sql.Int, boardId)
             .query('SELECT * FROM [columns] WHERE board_id = @boardId ORDER BY position ASC');
         const columns = colResult.recordset;
@@ -1568,10 +1775,10 @@ app.get('/api/boards/:boardId', authMiddleware, async (req, res) => {
 // =====================================================================
 
 app.post('/api/columns', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord) return res.status(403).json({ error: 'Only admins can add columns' });
     const { board_id, name, position } = req.body;
     if (!board_id || !name) return res.status(400).json({ error: 'board_id and name required' });
     try {
+        await assertBoardManagerMssql(req.user, board_id, 'Only board owners or admins can add columns');
         const result = await pool.request()
             .input('boardId', sql.Int, board_id)
             .input('name', sql.NVarChar(255), name.trim())
@@ -1583,10 +1790,12 @@ app.post('/api/columns', authMiddleware, async (req, res) => {
 });
 
 app.put('/api/columns/:id', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord) return res.status(403).json({ error: 'Only admins can update columns' });
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: 'name required' });
     try {
+        const colResult = await pool.request().input('id', sql.Int, req.params.id).query('SELECT board_id FROM [columns] WHERE id = @id');
+        if (colResult.recordset.length === 0) return res.status(404).json({ error: 'Column not found' });
+        await assertBoardManagerMssql(req.user, colResult.recordset[0].board_id, 'Only board owners or admins can update columns');
         await pool.request().input('name', sql.NVarChar(255), name.trim()).input('id', sql.Int, req.params.id)
             .query('UPDATE [columns] SET name = @name WHERE id = @id');
         const result = await pool.request().input('id', sql.Int, req.params.id).query('SELECT * FROM [columns] WHERE id = @id');
@@ -1597,7 +1806,6 @@ app.put('/api/columns/:id', authMiddleware, async (req, res) => {
 
 // Batch reorder columns
 app.patch('/api/columns/reorder', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord) return res.status(403).json({ error: 'Only admins can reorder columns' });
     const { columns } = req.body; // [{ id, position }]
     if (!Array.isArray(columns) || columns.length === 0) return res.status(400).json({ error: 'columns array required' });
     try {
@@ -1605,6 +1813,7 @@ app.patch('/api/columns/reorder', authMiddleware, async (req, res) => {
         const colResult = await pool.request().input('id', sql.Int, columns[0].id).query('SELECT board_id FROM [columns] WHERE id = @id');
         if (colResult.recordset.length === 0) return res.status(404).json({ error: 'Column not found' });
         const boardId = colResult.recordset[0].board_id;
+        await assertBoardManagerMssql(req.user, boardId, 'Only board owners or admins can reorder columns');
 
         // Update each column's position
         await Promise.all(columns.map(({ id, position }) =>
@@ -1619,10 +1828,10 @@ app.patch('/api/columns/reorder', authMiddleware, async (req, res) => {
 });
 
 app.delete('/api/columns/:id', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord) return res.status(403).json({ error: 'Only admins can delete columns' });
     try {
         const colResult = await pool.request().input('id', sql.Int, req.params.id).query('SELECT board_id FROM [columns] WHERE id = @id');
         if (colResult.recordset.length === 0) return res.status(404).json({ error: 'Column not found' });
+        await assertBoardManagerMssql(req.user, colResult.recordset[0].board_id, 'Only board owners or admins can delete columns');
         await pool.request().input('id', sql.Int, req.params.id).query('DELETE FROM [columns] WHERE id = @id');
         res.json({ success: true });
         broadcastBoardUpdate(colResult.recordset[0].board_id);
@@ -1637,16 +1846,18 @@ app.post('/api/cards', authMiddleware, async (req, res) => {
     const { column_id, content, position, created_by, image_url } = req.body;
     if (!column_id || (content === undefined && !image_url)) return res.status(400).json({ error: 'column_id and content or image_url required' });
     try {
+        const colResult = await pool.request().input('colId', sql.Int, column_id).query('SELECT board_id FROM [columns] WHERE id = @colId');
+        if (colResult.recordset.length === 0) return res.status(404).json({ error: 'Column not found' });
+        await assertBoardAccessMssql(req.user, colResult.recordset[0].board_id);
         const result = await pool.request()
             .input('colId', sql.Int, column_id)
             .input('content', sql.NVarChar(sql.MAX), content)
             .input('pos', sql.Int, position || 0)
-            .input('createdBy', sql.NVarChar(255), created_by || null)
+            .input('createdBy', sql.NVarChar(255), req.user.display_name || created_by || null)
             .input('imageUrl', sql.NVarChar(sql.MAX), image_url || null)
             .query('INSERT INTO cards (column_id, content, position, created_by, image_url) OUTPUT INSERTED.id VALUES (@colId, @content, @pos, @createdBy, @imageUrl)');
-        const card = { id: result.recordset[0].id, column_id, content, position: position || 0, created_by: created_by || null, image_url: image_url || null, deleted_at: null, reactions: [] };
+        const card = { id: result.recordset[0].id, column_id, content, position: position || 0, created_by: req.user.display_name || created_by || null, image_url: image_url || null, deleted_at: null, reactions: [] };
         res.status(201).json(card);
-        const colResult = await pool.request().input('colId', sql.Int, column_id).query('SELECT board_id FROM [columns] WHERE id = @colId');
         if (colResult.recordset.length > 0) broadcastBoardUpdate(colResult.recordset[0].board_id);
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -1660,9 +1871,11 @@ app.put('/api/cards/:id', authMiddleware, async (req, res) => {
             .query('SELECT ca.*, c.board_id FROM cards ca JOIN [columns] c ON ca.column_id = c.id WHERE ca.id = @id');
         if (!existResult.recordset.length) return res.status(404).json({ error: 'Card not found' });
         const existing = existResult.recordset[0];
+        const board = await assertBoardAccessMssql(req.user, existing.board_id);
+        const canManageBoard = req.user.is_overlord || req.user.is_admin || isBoardOwnerMssql(req.user, board) || (req.user.is_master && sameDepartmentForBoard(req.user, board));
 
-        if ((column_id !== undefined || position !== undefined) && !req.user.is_admin && !req.user.is_master && !req.user.is_overlord && existing.created_by !== req.user.display_name) {
-            return res.status(403).json({ error: 'You can only move your own cards' });
+        if (!canManageBoard && existing.created_by !== req.user.display_name) {
+            return res.status(403).json({ error: 'You can only edit your own cards' });
         }
 
         const sets = [];
@@ -1694,10 +1907,12 @@ app.put('/api/cards/:id', authMiddleware, async (req, res) => {
 app.delete('/api/cards/:id', authMiddleware, async (req, res) => {
     const { id } = req.params;
     try {
-        const cardResult = await pool.request().input('id', sql.Int, id).query('SELECT * FROM cards WHERE id = @id');
+        const cardResult = await pool.request().input('id', sql.Int, id).query('SELECT ca.*, c.board_id FROM cards ca JOIN [columns] c ON ca.column_id = c.id WHERE ca.id = @id');
         if (!cardResult.recordset.length) return res.status(404).json({ error: 'Card not found' });
         const card = cardResult.recordset[0];
-        if (!req.user.is_admin && !req.user.is_master && !req.user.is_overlord && card.created_by !== req.user.display_name)
+        const board = await assertBoardAccessMssql(req.user, card.board_id);
+        const canManageBoard = req.user.is_overlord || req.user.is_admin || isBoardOwnerMssql(req.user, board) || (req.user.is_master && sameDepartmentForBoard(req.user, board));
+        if (!canManageBoard && card.created_by !== req.user.display_name)
             return res.status(403).json({ error: 'You can only delete your own cards' });
 
         const colResult = await pool.request().input('id', sql.Int, id)

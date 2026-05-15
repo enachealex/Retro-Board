@@ -293,6 +293,13 @@ function verifyJwt(token) {
         return jwt.verify(token, JWT_SECRET);
     } catch { return null; }
 }
+async function getCurrentUserForAuth(userId) {
+    const [rows] = await pool.query(
+        'SELECT id, username, first_name, last_name, display_name, email, company, department, `lead`, is_admin, is_master FROM users WHERE id = ? LIMIT 1',
+        [userId]
+    );
+    return rows[0] || null;
+}
 async function hashPassword(password) {
     const salt = crypto.randomBytes(16).toString('hex');
     return new Promise((resolve, reject) => {
@@ -315,17 +322,157 @@ async function verifyPassword(password, stored) {
         });
     });
 }
-function authMiddleware(req, res, next) {
+
+const CAPTCHA_TTL_MS = Number.parseInt(process.env.CAPTCHA_TTL_MS || '120000', 10);
+const CAPTCHA_LENGTH = 6;
+const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const usedCaptchaNonces = new Map();
+
+function cleanupCaptchaNonces(now = Date.now()) {
+    for (const [nonce, expiresAt] of usedCaptchaNonces.entries()) {
+        if (expiresAt <= now) usedCaptchaNonces.delete(nonce);
+    }
+}
+
+function normalizeCaptchaAnswer(answer) {
+    return String(answer || '').replace(/\s+/g, '').toUpperCase();
+}
+
+function createCaptchaCode() {
+    let code = '';
+    for (let i = 0; i < CAPTCHA_LENGTH; i++) {
+        code += CAPTCHA_CHARS[crypto.randomInt(0, CAPTCHA_CHARS.length)];
+    }
+    return code;
+}
+
+function createCaptchaAnswerHash(nonce, expiresAt, answer) {
+    return crypto
+        .createHmac('sha256', `${JWT_SECRET}:captcha-answer`)
+        .update(`${nonce}:${expiresAt}:${normalizeCaptchaAnswer(answer)}`)
+        .digest('base64url');
+}
+
+function signCaptchaPayload(payload) {
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto.createHmac('sha256', JWT_SECRET).update(body).digest('base64url');
+    return `${body}.${signature}`;
+}
+
+function parseCaptchaToken(token) {
+    const [body, signature] = String(token || '').split('.');
+    if (!body || !signature) return null;
+    const expected = crypto.createHmac('sha256', JWT_SECRET).update(body).digest('base64url');
+    const sigBuffer = Buffer.from(signature);
+    const expectedBuffer = Buffer.from(expected);
+    if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) return null;
+    try {
+        return JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    } catch {
+        return null;
+    }
+}
+
+function renderCaptchaSvg(code) {
+    const width = 224;
+    const height = 78;
+    const chars = code.split('').map((char, index) => {
+        const x = 24 + index * 31 + crypto.randomInt(-3, 4);
+        const y = 48 + crypto.randomInt(-8, 9);
+        const rotation = crypto.randomInt(-18, 19);
+        const color = ['#001489', '#0b4f6c', '#5c2d91', '#1f7a5c'][crypto.randomInt(0, 4)];
+        return `<text x="${x}" y="${y}" transform="rotate(${rotation} ${x} ${y})" fill="${color}" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="800">${char}</text>`;
+    }).join('');
+    const lines = Array.from({ length: 10 }, () => {
+        const x1 = crypto.randomInt(0, width);
+        const y1 = crypto.randomInt(0, height);
+        const x2 = crypto.randomInt(0, width);
+        const y2 = crypto.randomInt(0, height);
+        const opacity = (crypto.randomInt(18, 42) / 100).toFixed(2);
+        return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#001489" stroke-width="1.4" opacity="${opacity}" />`;
+    }).join('');
+    const dots = Array.from({ length: 44 }, () => {
+        const cx = crypto.randomInt(0, width);
+        const cy = crypto.randomInt(0, height);
+        const radius = crypto.randomInt(1, 3);
+        const opacity = (crypto.randomInt(18, 48) / 100).toFixed(2);
+        return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="#00A3FF" opacity="${opacity}" />`;
+    }).join('');
+    const wave = `M 6 ${crypto.randomInt(30, 48)} C 54 ${crypto.randomInt(2, 28)}, 92 ${crypto.randomInt(54, 74)}, 132 ${crypto.randomInt(24, 52)} S 194 ${crypto.randomInt(8, 68)}, 218 ${crypto.randomInt(32, 56)}`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Security challenge"><rect width="100%" height="100%" rx="8" fill="#f4f7fb"/><path d="${wave}" fill="none" stroke="#ff8a00" stroke-width="3" opacity="0.55"/>${dots}${lines}${chars}</svg>`;
+    return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
+function createCaptchaChallenge() {
+    cleanupCaptchaNonces();
+    const code = createCaptchaCode();
+    const nonce = createRandomToken(18);
+    const expiresAt = Date.now() + CAPTCHA_TTL_MS;
+    const token = signCaptchaPayload({
+        v: 1,
+        nonce,
+        expiresAt,
+        answerHash: createCaptchaAnswerHash(nonce, expiresAt, code),
+    });
+    return { token, image: renderCaptchaSvg(code), expiresAt, expiresInSeconds: Math.floor(CAPTCHA_TTL_MS / 1000) };
+}
+
+function verifyCaptchaOrThrow(captcha) {
+    const token = captcha?.token;
+    const answer = normalizeCaptchaAnswer(captcha?.answer);
+    if (!token || !answer) {
+        const err = new Error('Security check is required.');
+        err.status = 400;
+        throw err;
+    }
+    const payload = parseCaptchaToken(token);
+    const now = Date.now();
+    cleanupCaptchaNonces(now);
+    if (!payload || payload.v !== 1 || !payload.nonce || !payload.expiresAt || !payload.answerHash) {
+        const err = new Error('Security check is invalid. Please reload it.');
+        err.status = 400;
+        throw err;
+    }
+    if (Number(payload.expiresAt) <= now) {
+        const err = new Error('Security check expired. Please reload it.');
+        err.status = 400;
+        throw err;
+    }
+    if (usedCaptchaNonces.has(payload.nonce)) {
+        const err = new Error('Security check was already used. Please reload it.');
+        err.status = 400;
+        throw err;
+    }
+    usedCaptchaNonces.set(payload.nonce, Number(payload.expiresAt));
+    const expected = createCaptchaAnswerHash(payload.nonce, payload.expiresAt, answer);
+    const expectedBuffer = Buffer.from(expected);
+    const actualBuffer = Buffer.from(payload.answerHash);
+    if (expectedBuffer.length !== actualBuffer.length || !crypto.timingSafeEqual(expectedBuffer, actualBuffer)) {
+        const err = new Error('Security check was incorrect. Please try a new one.');
+        err.status = 400;
+        throw err;
+    }
+}
+async function authMiddleware(req, res, next) {
     const authHeader = req.headers['authorization'];
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
     const payload = verifyJwt(authHeader.slice(7));
     if (!payload) return res.status(401).json({ error: 'Invalid or expired token' });
-    req.user = payload;
-    // Normalize: JWT stores user id as 'sub', but many endpoints reference 'id'
-    if (req.user.sub !== undefined && req.user.id === undefined) {
-        req.user.id = req.user.sub;
+
+    try {
+        const currentUser = await getCurrentUserForAuth(payload.sub);
+        if (!currentUser) return res.status(401).json({ error: 'User no longer exists' });
+        req.user = {
+            ...payload,
+            ...buildUserPublic(currentUser),
+            sub: currentUser.id,
+            id: currentUser.id,
+        };
+    } catch (error) {
+        console.error('Auth refresh error:', error);
+        return res.status(500).json({ error: 'Internal server error' });
     }
     next();
 }
@@ -563,10 +710,13 @@ const initDb = async () => {
                 name VARCHAR(255) NOT NULL,
                 company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}',
                 department ENUM('OWS', 'Apex') NOT NULL DEFAULT 'OWS',
+                owner_user_id INT DEFAULT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
         try { await pool.query(`ALTER TABLE boards ADD COLUMN company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}' AFTER name`); } catch (e) { /* column already exists */ }
+        try { await pool.query(`ALTER TABLE boards ADD COLUMN owner_user_id INT DEFAULT NULL AFTER department`); } catch (e) { /* column already exists */ }
+        try { await pool.query(`ALTER TABLE boards ADD CONSTRAINT fk_boards_owner FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL`); } catch (e) { /* constraint already exists */ }
         // Migration for existing boards table
         try {
             await pool.query(`ALTER TABLE boards ADD COLUMN department ENUM('OWS','Apex') NOT NULL DEFAULT 'OWS' AFTER name`);
@@ -580,6 +730,10 @@ const initDb = async () => {
         try {
             await pool.query(`ALTER TABLE boards ADD COLUMN bg_image TEXT DEFAULT NULL`);
         } catch (e) { /* column already exists */ }
+        try {
+            await pool.query(`UPDATE boards b JOIN users u ON b.name = CONCAT('Retro - ', u.display_name) SET b.owner_user_id = u.id WHERE b.owner_user_id IS NULL`);
+            await pool.query(`UPDATE boards b SET owner_user_id = (SELECT bm.user_id FROM board_members bm WHERE bm.board_id = b.id ORDER BY bm.id ASC LIMIT 1) WHERE b.owner_user_id IS NULL`);
+        } catch (e) { /* board_members may not exist yet on first run */ }
 
         await pool.query(`
             CREATE TABLE IF NOT EXISTS \`columns\` (
@@ -851,6 +1005,10 @@ const initDb = async () => {
                 FOREIGN KEY (added_by) REFERENCES users(id) ON DELETE SET NULL
             )
         `);
+        try {
+            await pool.query(`UPDATE boards b JOIN users u ON b.name = CONCAT('Retro - ', u.display_name) SET b.owner_user_id = u.id WHERE b.owner_user_id IS NULL`);
+            await pool.query(`UPDATE boards b SET owner_user_id = (SELECT bm.user_id FROM board_members bm WHERE bm.board_id = b.id ORDER BY bm.id ASC LIMIT 1) WHERE b.owner_user_id IS NULL`);
+        } catch (e) { /* best-effort legacy ownership backfill */ }
 
         // --- Performance indexes ---
         const indexes = [
@@ -928,7 +1086,7 @@ const broadcastBoardUpdate = async (boardId) => {
 const broadcastBoardsUpdate = async () => {
     try {
         // Emit the full list — each client filters to their own allowed boards on receipt
-        const [boards] = await pool.query('SELECT id, name, company, department, bg_image, created_at FROM boards ORDER BY created_at DESC');
+        const [boards] = await pool.query('SELECT id, name, company, department, owner_user_id, bg_image, created_at FROM boards ORDER BY created_at DESC');
         io.emit('boards:update', { boards });
     } catch (error) {
         console.error('Error broadcasting boards update:', error);
@@ -955,28 +1113,62 @@ const getRequestBaseUrl = (req) => {
 };
 
 // --- Board Authorization Helpers ---
-// Throws an error with .status if the user is not a member of the board.
-async function assertBoardAccess(userId, boardId, isMaster) {
-    if (isMaster) return; // Masters can access any board
+async function getBoardForAuth(boardId) {
+    const [rows] = await pool.query('SELECT * FROM boards WHERE id = ? LIMIT 1', [boardId]);
+    if (rows.length === 0) {
+        const err = new Error('Board not found');
+        err.status = 404;
+        throw err;
+    }
+    return rows[0];
+}
+
+function sameCompanyForBoard(user, board) {
+    return (board.company || DEFAULT_COMPANY) === (user.company || DEFAULT_COMPANY);
+}
+
+function isBoardOwner(user, board) {
+    return Number(board.owner_user_id) === Number(user.id || user.sub);
+}
+
+async function assertBoardAccess(user, boardId) {
+    const board = await getBoardForAuth(boardId);
+    if (user.is_master) return board;
+    if (!sameCompanyForBoard(user, board)) {
+        const err = new Error('Access denied');
+        err.status = 403;
+        throw err;
+    }
+    if (user.is_admin || isBoardOwner(user, board)) return board;
     const [rows] = await pool.query(
         'SELECT id FROM board_members WHERE board_id = ? AND user_id = ?',
-        [boardId, userId]
+        [boardId, user.id || user.sub]
     );
     if (rows.length === 0) {
         const err = new Error('Access denied');
         err.status = 403;
         throw err;
     }
+    return board;
 }
 
-// Throws if the user is not an admin/master, or not a member of the board.
+async function assertBoardManager(user, boardId, message = 'Only board owners or admins can perform this action') {
+    const board = await getBoardForAuth(boardId);
+    if (user.is_master) return board;
+    if (sameCompanyForBoard(user, board) && (user.is_admin || isBoardOwner(user, board))) return board;
+    const err = new Error(message);
+    err.status = 403;
+    throw err;
+}
+
 async function assertBoardAdmin(userId, boardId, isAdmin, isMaster) {
+    const user = { id: userId, is_admin: isAdmin, is_master: isMaster, company: DEFAULT_COMPANY };
     if (!isAdmin && !isMaster) {
         const err = new Error('Only admins can perform this action');
         err.status = 403;
         throw err;
     }
-    await assertBoardAccess(userId, boardId, isMaster);
+    await assertBoardAccess(user, boardId);
 }
 
 // Track connected sockets by userId for targeted events
@@ -1030,7 +1222,7 @@ io.on('connection', (socket) => {
 async function createDefaultAdminBoard(firstName, lastName, company, department, userId) {
     const boardName = `Retro - ${firstName} ${lastName}`;
     try {
-        const [result] = await pool.query('INSERT INTO boards (name, company, department) VALUES (?, ?, ?)', [boardName, company || DEFAULT_COMPANY, department]);
+        const [result] = await pool.query('INSERT INTO boards (name, company, department, owner_user_id) VALUES (?, ?, ?, ?)', [boardName, company || DEFAULT_COMPANY, department, userId || null]);
         const boardId = result.insertId;
         const templateColumns = [
             ['Ice Breaker', 0],
@@ -1054,8 +1246,13 @@ async function createDefaultAdminBoard(firstName, lastName, company, department,
 
 // --- Auth Routes ---
 
+app.get('/api/auth/captcha', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(createCaptchaChallenge());
+});
+
 app.post('/api/auth/register', registerLimiter, async (req, res) => {
-    const { firstName, lastName, email, password, company, department, lead, role, inviteToken } = req.body;
+    const { firstName, lastName, email, password, company, department, lead, role, inviteToken, captcha } = req.body;
     const emailLower = (email || '').toLowerCase();
     const isMasterEmail = MASTER_EMAILS.includes(emailLower);
 
@@ -1116,6 +1313,8 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     }
 
     try {
+        if (!isMasterAdd) verifyCaptchaOrThrow(captcha);
+
         let inviteRecord = null;
         if (!isMasterAdd && inviteToken && typeof inviteToken === 'string' && inviteToken.trim()) {
             const [inviteRows] = await pool.query(
@@ -1251,17 +1450,20 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
         sendWelcomeEmail(first_name, emailLower);
         res.status(201).json({ token, user: buildUserPublic(newUser), redirectBoardId: inviteRecord?.board_id || null });
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         console.error('Register error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, captcha } = req.body;
     if (!email || !password) {
         return res.status(400).json({ error: 'email and password are required' });
     }
     try {
+        verifyCaptchaOrThrow(captcha);
+
         const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email.trim().toLowerCase()]);
         if (rows.length === 0) {
             return res.status(401).json({ error: 'Invalid email or password' });
@@ -1287,13 +1489,14 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         const password_weak = typeof password === 'string' && password.length < 6;
         res.json({ token, user: buildUserPublic(user), password_weak });
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         console.error('Login error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
 app.get('/api/auth/me', authMiddleware, (req, res) => {
-    res.json({ user: { id: req.user.sub, username: req.user.username, display_name: req.user.display_name, email: req.user.email, company: req.user.company || '', department: req.user.department, lead: req.user.lead || null, is_admin: req.user.is_admin, is_master: req.user.is_master || false } });
+    res.json({ user: buildUserPublic(req.user) });
 });
 
 app.get('/api/companies', async (req, res) => {
@@ -1301,6 +1504,7 @@ app.get('/api/companies', async (req, res) => {
         const [rows] = await pool.query('SELECT name FROM companies ORDER BY name');
         res.json(rows.map(r => r.name));
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: error.message });
     }
 });
@@ -1341,6 +1545,7 @@ app.post('/api/auth/request-password-reset', authLimiter, async (req, res) => {
         }
         res.json({ success: true });
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: error.message });
     }
 });
@@ -1367,6 +1572,7 @@ app.post('/api/auth/reset-password', passwordLimiter, async (req, res) => {
         await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?', [rows[0].id]);
         res.json({ success: true });
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: error.message });
     }
 });
@@ -1426,10 +1632,9 @@ app.delete('/api/auth/account', authMiddleware, async (req, res) => {
 });
 
 app.get('/api/users', authMiddleware, async (req, res) => {
-    if (!req.user.is_master && !req.user.is_admin) return res.status(403).json({ error: 'Access denied' });
     try {
         const selectedCompany = String(req.query?.company || '').trim();
-        const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
+        const companyScope = req.user.is_master ? (selectedCompany || req.user.company || DEFAULT_COMPANY) : (req.user.company || DEFAULT_COMPANY);
         if (req.user.is_master) {
             const [rows] = await pool.query(
                 'SELECT id, username, first_name, last_name, display_name, email, company, department, `lead`, is_admin, is_master, role_key, created_at FROM users WHERE company = ? ORDER BY department, `lead`, display_name',
@@ -1437,10 +1642,9 @@ app.get('/api/users', authMiddleware, async (req, res) => {
             );
             return res.json(rows);
         }
-        // Admins/Leads: only return users on their team (matching lead = their display_name)
         const [rows] = await pool.query(
             'SELECT id, username, first_name, last_name, display_name, email, company, department, `lead`, is_admin, is_master, role_key, created_at FROM users WHERE company = ? ORDER BY display_name',
-            [req.user.company || DEFAULT_COMPANY]
+            [companyScope]
         );
         res.json(rows);
     } catch (error) {
@@ -1502,12 +1706,18 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
         if (parseInt(userId) === req.user.sub) return res.status(400).json({ error: 'You cannot change your own master status' });
         const val = is_master ? 1 : 0;
         try {
+            const [userRows] = await pool.query('SELECT email FROM users WHERE id = ?', [userId]);
+            if (userRows.length === 0) return res.status(404).json({ error: 'User not found' });
+            const userEmail = userRows[0].email;
             // Promoting to master also clears is_admin; demoting leaves is_admin as-is
             if (val === 1) {
                 await pool.query('UPDATE users SET is_master = 1, is_admin = 0 WHERE id = ?', [userId]);
+                await pool.query('INSERT IGNORE INTO master_emails (email) VALUES (?)', [userEmail]);
             } else {
                 await pool.query('UPDATE users SET is_master = 0 WHERE id = ?', [userId]);
+                await pool.query('DELETE FROM master_emails WHERE email = ?', [userEmail]);
             }
+            await reloadMasterEmails();
             res.json({ success: true });
         } catch (error) { res.status(500).json({ error: error.message }); }
         return;
@@ -1821,8 +2031,8 @@ app.get('/api/boards', authMiddleware, async (req, res) => {
         let boards;
         const selectedCompany = String(req.query?.company || '').trim();
         const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
-        if (req.user.is_master) {
-            // Masters can select which company to view
+        if (req.user.is_master || req.user.is_admin) {
+            // Masters/Admins can view all boards in the selected/current company
             [boards] = await pool.query('SELECT * FROM boards WHERE company = ? ORDER BY created_at DESC', [companyScope]);
         } else {
             // Admins and regular users only see boards they are explicitly added to
@@ -1848,7 +2058,13 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
         ? department
         : (VALID_DEPARTMENTS.includes(req.user.department) ? req.user.department : 'QA');
     try {
-        const [result] = await pool.query('INSERT INTO boards (name, company, department) VALUES (?, ?, ?)', [name.trim(), req.user.company || DEFAULT_COMPANY, boardDept]);
+        if (!req.user.is_admin && !req.user.is_master) {
+            const [ownedBoards] = await pool.query('SELECT COUNT(*) AS count FROM boards WHERE owner_user_id = ?', [req.user.id]);
+            if (ownedBoards[0].count >= 3) {
+                return res.status(403).json({ error: 'Basic users can create up to 3 boards.' });
+            }
+        }
+        const [result] = await pool.query('INSERT INTO boards (name, company, department, owner_user_id) VALUES (?, ?, ?, ?)', [name.trim(), req.user.company || DEFAULT_COMPANY, boardDept, req.user.id]);
         const insertId = result.insertId;
         const defaultColumns = template === 'template'
             ? [
@@ -1866,7 +2082,7 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
             await pool.query('INSERT INTO `columns` (board_id, name, position) VALUES (?, ?, ?)', [insertId, colName, pos]);
         }
 
-        const board = { id: insertId, name: name.trim(), company: req.user.company || DEFAULT_COMPANY, department: boardDept };
+        const board = { id: insertId, name: name.trim(), company: req.user.company || DEFAULT_COMPANY, department: boardDept, owner_user_id: req.user.id };
         // Auto-add the creating user as a board member
         await pool.query('INSERT IGNORE INTO board_members (board_id, user_id) VALUES (?, ?)', [insertId, req.user.id]);
         res.status(201).json(board);
@@ -1880,14 +2096,8 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
 app.put('/api/boards/:id', authMiddleware, async (req, res) => {
     const { name } = req.body;
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
-    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Only admins can rename boards' });
     try {
-        const [boardRows] = await pool.query('SELECT * FROM boards WHERE id = ?', [req.params.id]);
-        if (boardRows.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_master) {
-            const [membership] = await pool.query('SELECT id FROM board_members WHERE board_id = ? AND user_id = ?', [req.params.id, req.user.id]);
-            if (membership.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardManager(req.user, req.params.id, 'Only board owners or admins can rename boards');
         await pool.query('UPDATE boards SET name = ? WHERE id = ?', [name.trim(), req.params.id]);
         res.json({ success: true, id: Number(req.params.id), name: name.trim() });
         broadcastBoardsUpdate();
@@ -1897,12 +2107,8 @@ app.put('/api/boards/:id', authMiddleware, async (req, res) => {
 });
 
 app.delete('/api/boards/:id', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Only admins can delete boards' });
     try {
-        if (!req.user.is_master) {
-            const [membership] = await pool.query('SELECT id FROM board_members WHERE board_id = ? AND user_id = ?', [req.params.id, req.user.id]);
-            if (membership.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardManager(req.user, req.params.id, 'Only board owners or admins can delete boards');
         await pool.query('DELETE FROM boards WHERE id = ?', [req.params.id]);
         res.json({ success: true });
         broadcastBoardsUpdate();
@@ -1912,15 +2118,9 @@ app.delete('/api/boards/:id', authMiddleware, async (req, res) => {
 });
 
 app.put('/api/boards/:id/bg', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Access denied' });
     const { bg_image } = req.body; // null to clear, string URL to set
     try {
-        const [boardRows] = await pool.query('SELECT * FROM boards WHERE id = ?', [req.params.id]);
-        if (boardRows.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_master) {
-            const [membership] = await pool.query('SELECT id FROM board_members WHERE board_id = ? AND user_id = ?', [req.params.id, req.user.id]);
-            if (membership.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardManager(req.user, req.params.id, 'Only board owners or admins can change the board background');
         const value = bg_image && typeof bg_image === 'string' ? bg_image.trim() : null;
         await pool.query('UPDATE boards SET bg_image = ? WHERE id = ?', [value, req.params.id]);
         res.json({ success: true, bg_image: value });
@@ -1936,14 +2136,14 @@ app.put('/api/boards/:id/bg', authMiddleware, async (req, res) => {
 app.get('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
     const { boardId } = req.params;
     try {
-        await assertBoardAccess(req.user.id, boardId, req.user.is_master);
+        const board = await assertBoardAccess(req.user, boardId);
         const [rows] = await pool.query(
             `SELECT u.id, u.first_name, u.last_name, u.display_name, u.email, u.company, u.department, u.\`lead\`, u.is_admin, u.is_master, bm.created_at AS added_at
              FROM board_members bm
              JOIN users u ON u.id = bm.user_id
              WHERE bm.board_id = ? AND u.company = ?
              ORDER BY u.display_name`,
-            [boardId, req.user.company || DEFAULT_COMPANY]
+            [boardId, board.company || DEFAULT_COMPANY]
         );
         res.json(rows);
     } catch (error) {
@@ -1952,22 +2152,16 @@ app.get('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
     }
 });
 
-// Add a member to a board (admin+ only, must be a member of the board)
+// Add a member to a board (board owner/admin/master only)
 app.post('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Only admins can manage board members' });
     const { boardId } = req.params;
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: 'userId is required' });
     try {
-        const [boardRows] = await pool.query('SELECT * FROM boards WHERE id = ?', [boardId]);
-        if (boardRows.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_master) {
-            const [membership] = await pool.query('SELECT id FROM board_members WHERE board_id = ? AND user_id = ?', [boardId, req.user.id]);
-            if (membership.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
-        const [userRows] = await pool.query('SELECT id, display_name, email, department FROM users WHERE id = ?', [userId]);
+        const board = await assertBoardManager(req.user, boardId, 'Only board owners or admins can manage board members');
+        const [userRows] = await pool.query('SELECT id, display_name, email, company, department FROM users WHERE id = ?', [userId]);
         if (userRows.length === 0) return res.status(404).json({ error: 'User not found' });
-        if ((userRows[0].company || DEFAULT_COMPANY) !== (req.user.company || DEFAULT_COMPANY)) {
+        if ((userRows[0].company || DEFAULT_COMPANY) !== (board.company || DEFAULT_COMPANY)) {
             return res.status(403).json({ error: 'You can only add users from your company' });
         }
         await pool.query('INSERT IGNORE INTO board_members (board_id, user_id, added_by) VALUES (?, ?, ?)', [boardId, userId, req.user.id]);
@@ -1981,21 +2175,17 @@ app.post('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
             }
         }
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: error.message });
     }
 });
 
-// Remove a member from a board (admin+ only, must be a member of the board)
+// Remove a member from a board (board owner/admin/master only)
 app.delete('/api/boards/:boardId/members/:userId', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Only admins can manage board members' });
     const { boardId, userId } = req.params;
     try {
-        const [boardRows] = await pool.query('SELECT * FROM boards WHERE id = ?', [boardId]);
-        if (boardRows.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_master) {
-            const [membership] = await pool.query('SELECT id FROM board_members WHERE board_id = ? AND user_id = ?', [boardId, req.user.id]);
-            if (membership.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        const board = await assertBoardManager(req.user, boardId, 'Only board owners or admins can manage board members');
+        if (Number(userId) === Number(board.owner_user_id)) return res.status(400).json({ error: 'Board owners cannot be removed from their own board' });
         await pool.query('DELETE FROM board_members WHERE board_id = ? AND user_id = ?', [boardId, userId]);
         res.json({ success: true });
         broadcastBoardsUpdate();
@@ -2007,6 +2197,7 @@ app.delete('/api/boards/:boardId/members/:userId', authMiddleware, async (req, r
             }
         }
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: error.message });
     }
 });
@@ -2016,7 +2207,7 @@ app.delete('/api/boards/:boardId/members/:userId', authMiddleware, async (req, r
 app.get('/api/boards/:boardId/users', authMiddleware, async (req, res) => {
     const { boardId } = req.params;
     try {
-        await assertBoardAccess(req.user.id, boardId, req.user.is_master);
+        const board = await assertBoardAccess(req.user, boardId);
         const [rows] = await pool.query(
             `SELECT u.id, u.first_name, u.last_name, u.display_name, u.email, u.company, u.department, u.\`lead\`, u.is_admin, u.is_master,
                     0 AS is_pending, NULL AS invite_token
@@ -2024,7 +2215,7 @@ app.get('/api/boards/:boardId/users', authMiddleware, async (req, res) => {
              JOIN users u ON u.id = bm.user_id
              WHERE bm.board_id = ? AND u.company = ?
              ORDER BY u.is_master DESC, u.is_admin DESC, u.display_name`,
-            [boardId, req.user.company || DEFAULT_COMPANY]
+            [boardId, board.company || DEFAULT_COMPANY]
         );
 
         const [pendingRows] = await pool.query(
@@ -2034,16 +2225,16 @@ app.get('/api/boards/:boardId/users', authMiddleware, async (req, res) => {
              LEFT JOIN users u ON u.id = bi.invitee_user_id
              WHERE bi.board_id = ? AND bi.status = 'PENDING'
              ORDER BY bi.created_at DESC`,
-            [req.user.company || DEFAULT_COMPANY, boardId]
+            [board.company || DEFAULT_COMPANY, boardId]
         );
 
         const pendingUsers = pendingRows
-            .filter(p => (p.company || req.user.company || DEFAULT_COMPANY) === (req.user.company || DEFAULT_COMPANY))
+            .filter(p => (p.company || board.company || DEFAULT_COMPANY) === (board.company || DEFAULT_COMPANY))
             .map((p, idx) => ({
                 id: `pending-${p.id}-${idx}`,
                 display_name: p.display_name || 'Pending User',
                 email: p.email || '',
-                company: p.company || req.user.company || DEFAULT_COMPANY,
+                company: p.company || board.company || DEFAULT_COMPANY,
                 is_pending: 1,
                 invite_token: p.token,
                 is_admin: 0,
@@ -2098,20 +2289,15 @@ app.post('/api/boards/:id/bg-upload', authMiddleware, multer({ storage: multer.d
 }), limits: { fileSize: 20 * 1024 * 1024 }, fileFilter: (req, file, cb) => {
     cb(null, /image\//.test(file.mimetype));
 }}).single('bg'), async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Access denied' });
     if (!req.file) return res.status(400).json({ error: 'No image provided' });
     const url = `/uploads/${req.file.filename}`;
     try {
-        const [boardRows] = await pool.query('SELECT * FROM boards WHERE id = ?', [req.params.id]);
-        if (boardRows.length === 0) return res.status(404).json({ error: 'Board not found' });
-        if (!req.user.is_master) {
-            const [membership] = await pool.query('SELECT id FROM board_members WHERE board_id = ? AND user_id = ?', [req.params.id, req.user.id]);
-            if (membership.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardManager(req.user, req.params.id, 'Only board owners or admins can change the board background');
         await pool.query('UPDATE boards SET bg_image = ? WHERE id = ?', [url, req.params.id]);
         res.json({ success: true, url });
         broadcastBoardsUpdate();
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: error.message });
     }
 });
@@ -2120,16 +2306,7 @@ app.get('/api/boards/:boardId', authMiddleware, async (req, res) => {
     const { boardId } = req.params;
     try {
         // Verify the user has access to this board
-        const [boardRows] = await pool.query('SELECT * FROM boards WHERE id = ?', [boardId]);
-        if (boardRows.length === 0) return res.status(404).json({ error: 'Board not found' });
-        const board = boardRows[0];
-        if (req.user.is_master) {
-            // Masters access any board
-        } else {
-            // Admins and members: must be an explicit board member
-            const [membership] = await pool.query('SELECT id FROM board_members WHERE board_id = ? AND user_id = ?', [boardId, req.user.id]);
-            if (membership.length === 0) return res.status(403).json({ error: 'Access denied' });
-        }
+        await assertBoardAccess(req.user, boardId);
 
         const [columns] = await pool.query('SELECT * FROM `columns` WHERE board_id = ? ORDER BY position ASC', [boardId]);
 
@@ -2144,6 +2321,7 @@ app.get('/api/boards/:boardId', authMiddleware, async (req, res) => {
         }
         res.json({ columns, cards });
     } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: error.message });
     }
 });
@@ -2154,7 +2332,7 @@ app.post('/api/columns', authMiddleware, async (req, res) => {
     const { board_id, name, position } = req.body;
     if (!board_id || !name) return res.status(400).json({ error: 'board_id and name required' });
     try {
-        await assertBoardAccess(req.user.id, board_id, req.user.is_master);
+        await assertBoardManager(req.user, board_id, 'Only board owners or admins can add columns');
         const [result] = await pool.query(
             'INSERT INTO `columns` (board_id, name, position) VALUES (?, ?, ?)',
             [board_id, name.trim(), position || 0]
@@ -2185,7 +2363,7 @@ app.patch('/api/columns/reorder', authMiddleware, async (req, res) => {
 
         const boardIds = [...new Set(rows.map(r => r.board_id))];
         for (const boardId of boardIds) {
-            await assertBoardAdmin(req.user.id, boardId, req.user.is_admin, req.user.is_master);
+            await assertBoardManager(req.user, boardId, 'Only board owners or admins can reorder columns');
         }
 
         for (const update of updates) {
@@ -2210,7 +2388,7 @@ app.patch('/api/columns/reorder', authMiddleware, async (req, res) => {
 app.get('/api/boards/:boardId/pending-invites', authMiddleware, async (req, res) => {
     const { boardId } = req.params;
     try {
-        await assertBoardAccess(req.user.id, boardId, req.user.is_master);
+        await assertBoardManager(req.user, boardId, 'Only board owners or admins can view pending invites');
         const [rows] = await pool.query(
             `SELECT bi.id, bi.token, bi.invitee_email, bi.created_at,
                     u.id AS invitee_user_id, u.display_name
@@ -2230,12 +2408,11 @@ app.get('/api/boards/:boardId/pending-invites', authMiddleware, async (req, res)
 });
 
 app.post('/api/boards/:boardId/invites', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Only admins can create invites' });
     const { boardId } = req.params;
     const { userId, email } = req.body || {};
 
     try {
-        await assertBoardAdmin(req.user.id, boardId, req.user.is_admin, req.user.is_master);
+        const board = await assertBoardManager(req.user, boardId, 'Only board owners or admins can create invites');
 
         let inviteeEmail = email ? String(email).trim().toLowerCase() : null;
         let inviteeUserId = userId ? Number(userId) : null;
@@ -2243,7 +2420,7 @@ app.post('/api/boards/:boardId/invites', authMiddleware, async (req, res) => {
         if (inviteeUserId) {
             const [targetRows] = await pool.query('SELECT id, email, company FROM users WHERE id = ?', [inviteeUserId]);
             if (targetRows.length === 0) return res.status(404).json({ error: 'User not found' });
-            if ((targetRows[0].company || DEFAULT_COMPANY) !== (req.user.company || DEFAULT_COMPANY)) {
+            if ((targetRows[0].company || DEFAULT_COMPANY) !== (board.company || DEFAULT_COMPANY)) {
                 return res.status(403).json({ error: 'You can only invite users from your company' });
             }
             inviteeEmail = targetRows[0].email;
@@ -2279,10 +2456,9 @@ app.post('/api/boards/:boardId/invites', authMiddleware, async (req, res) => {
 });
 
 app.get('/api/boards/:boardId/invite-link', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Only admins can access invite link' });
     const { boardId } = req.params;
     try {
-        await assertBoardAdmin(req.user.id, boardId, req.user.is_admin, req.user.is_master);
+        await assertBoardManager(req.user, boardId, 'Only board owners or admins can access invite links');
         const dailyLink = await getOrCreateDailyBoardInviteLink(Number(boardId), req.user.id);
         const [boardRows] = await pool.query('SELECT name FROM boards WHERE id = ? LIMIT 1', [boardId]);
         res.json({
@@ -2299,10 +2475,9 @@ app.get('/api/boards/:boardId/invite-link', authMiddleware, async (req, res) => 
 });
 
 app.delete('/api/boards/:boardId/invites/:inviteId', authMiddleware, async (req, res) => {
-    if (!req.user.is_admin && !req.user.is_master) return res.status(403).json({ error: 'Only admins can cancel invites' });
     const { boardId, inviteId } = req.params;
     try {
-        await assertBoardAdmin(req.user.id, boardId, req.user.is_admin, req.user.is_master);
+        await assertBoardManager(req.user, boardId, 'Only board owners or admins can cancel invites');
         await pool.query(
             `UPDATE board_invites
              SET status = 'CANCELED', decided_at = NOW()
@@ -2438,7 +2613,7 @@ app.put('/api/columns/:id', authMiddleware, async (req, res) => {
     try {
         const [cols] = await pool.query('SELECT * FROM `columns` WHERE id = ?', [req.params.id]);
         if (cols.length === 0) return res.status(404).json({ error: 'Column not found' });
-        await assertBoardAccess(req.user.id, cols[0].board_id, req.user.is_master);
+        await assertBoardManager(req.user, cols[0].board_id, 'Only board owners or admins can update columns');
         await pool.query('UPDATE `columns` SET name = ? WHERE id = ?', [name.trim(), req.params.id]);
         const [updated] = await pool.query('SELECT * FROM `columns` WHERE id = ?', [req.params.id]);
         res.json(updated[0] || { success: true, id: req.params.id, name: name.trim() });
@@ -2453,7 +2628,7 @@ app.delete('/api/columns/:id', authMiddleware, async (req, res) => {
     try {
         const [cols] = await pool.query('SELECT board_id FROM `columns` WHERE id = ?', [req.params.id]);
         if (cols.length === 0) return res.status(404).json({ error: 'Column not found' });
-        await assertBoardAdmin(req.user.id, cols[0].board_id, req.user.is_admin, req.user.is_master);
+        await assertBoardManager(req.user, cols[0].board_id, 'Only board owners or admins can delete columns');
         await pool.query('DELETE FROM `columns` WHERE id = ?', [req.params.id]);
         res.json({ success: true });
         broadcastBoardUpdate(cols[0].board_id);
@@ -2472,7 +2647,7 @@ app.post('/api/cards', authMiddleware, async (req, res) => {
         // Resolve board_id from column and verify membership
         const [cols] = await pool.query('SELECT board_id FROM `columns` WHERE id = ?', [column_id]);
         if (cols.length === 0) return res.status(404).json({ error: 'Column not found' });
-        await assertBoardAccess(req.user.id, cols[0].board_id, req.user.is_master);
+        await assertBoardAccess(req.user, cols[0].board_id);
         // Derive ownership server-side from the authenticated user
         const createdByUserId = req.user.id;
         const createdByName = req.user.display_name || null;
@@ -2499,11 +2674,12 @@ app.put('/api/cards/:id', authMiddleware, async (req, res) => {
         if (!existing.length) return res.status(404).json({ error: 'Card not found' });
 
         // Verify the user is a member of the board this card belongs to
-        await assertBoardAccess(req.user.id, existing[0].board_id, req.user.is_master);
+        const board = await assertBoardAccess(req.user, existing[0].board_id);
+        const canManageBoard = req.user.is_master || (sameCompanyForBoard(req.user, board) && (req.user.is_admin || isBoardOwner(req.user, board)));
 
-        // Only card owner, admins, or masters can move/edit cards
-        if ((column_id !== undefined || position !== undefined) && !req.user.is_admin && !req.user.is_master && existing[0].created_by_user_id !== req.user.id) {
-            return res.status(403).json({ error: 'You can only move your own cards' });
+        // Board owners/admins/masters can manage all cards; invited users can only edit their own cards.
+        if (!canManageBoard && Number(existing[0].created_by_user_id) !== Number(req.user.id)) {
+            return res.status(403).json({ error: 'You can only edit your own cards' });
         }
 
         // Build a single UPDATE with all provided fields
@@ -2552,7 +2728,7 @@ app.post('/api/cards/:id/reactions', authMiddleware, async (req, res) => {
         if (cardRows.length === 0) return res.status(404).json({ error: 'Card not found' });
 
         const boardId = cardRows[0].board_id;
-        await assertBoardAccess(req.user.id, boardId, req.user.is_master);
+        await assertBoardAccess(req.user, boardId);
 
         const [existing] = await pool.query(
             'SELECT id FROM card_reactions WHERE card_id = ? AND user_id = ? AND emoji = ?',
@@ -2585,9 +2761,10 @@ app.delete('/api/cards/:id', authMiddleware, async (req, res) => {
         const card = cardCols[0];
 
         // Verify board membership
-        await assertBoardAccess(req.user.id, card.board_id, req.user.is_master);
+        const board = await assertBoardAccess(req.user, card.board_id);
+        const canManageBoard = req.user.is_master || (sameCompanyForBoard(req.user, board) && (req.user.is_admin || isBoardOwner(req.user, board)));
 
-        if (!req.user.is_admin && !req.user.is_master && card.created_by_user_id !== req.user.id) {
+        if (!canManageBoard && Number(card.created_by_user_id) !== Number(req.user.id)) {
             return res.status(403).json({ error: 'You can only delete your own cards' });
         }
         await pool.query('UPDATE cards SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?', [id]);

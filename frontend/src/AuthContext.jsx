@@ -19,45 +19,12 @@ export function AuthProvider({ children }) {
   // The /me check runs in the background and logs out if the token is stale.
   const [authInitialized, setAuthInitialized] = useState(true);
 
-  // On mount: silently verify the stored token with the backend.
-  // On 401 → clear stale credentials so the login page is shown.
-  // On network error → trust the stored token (backend may be temporarily down).
-  useEffect(() => {
-    const storedToken = localStorage.getItem(TOKEN_KEY);
-    if (!storedToken) return;
-    const AUTH_URL = getAuthUrl();
-    axios.get(`${AUTH_URL}/me`, { headers: { Authorization: `Bearer ${storedToken}` } })
-      .then(res => {
-        // Refresh user data in case role/name changed since last login
-        persistAuth(storedToken, res.data.user);
-      })
-      .catch(err => {
-        if (err.response?.status === 401) {
-          // Token is expired or revoked — clear so login page shows
-          localStorage.removeItem(TOKEN_KEY);
-          localStorage.removeItem(USER_KEY);
-          localStorage.removeItem("retro_boards");
-          localStorage.removeItem("retro_active_board");
-          localStorage.removeItem("retro_board_cache");
-          localStorage.removeItem("retro_cache_owner");
-          localStorage.removeItem("retro_redirect_board_id");
-          setToken(null);
-          setUser(null);
-        } else if (!err.request) {
-          // Response received but unexpected error — log it
-          console.warn('Unexpected error during token validation:', err.message);
-        }
-        // Network errors (no response): keep the stored state as-is
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const persistAuth = (tok, usr) => {
+  const persistAuth = useCallback((tok, usr) => {
     localStorage.setItem(TOKEN_KEY, tok);
     localStorage.setItem(USER_KEY, JSON.stringify(usr));
     setToken(tok);
     setUser(usr);
-  };
+  }, [persistAuth]);
 
   const clearAuth = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
@@ -71,7 +38,47 @@ export function AuthProvider({ children }) {
     setToken(null);
     setUser(null);
     setAuthError(null);
-  }, []);
+  }, [persistAuth]);
+
+  const refreshUser = useCallback(async () => {
+    const storedToken = localStorage.getItem(TOKEN_KEY);
+    if (!storedToken) return false;
+    const AUTH_URL = getAuthUrl();
+    try {
+      const res = await axios.get(`${AUTH_URL}/me`, { headers: { Authorization: `Bearer ${storedToken}` } });
+      persistAuth(storedToken, res.data.user);
+      return true;
+    } catch (err) {
+      if (err.response?.status === 401) {
+        clearAuth();
+      } else if (!err.request) {
+        console.warn('Unexpected error during token validation:', err.message);
+      }
+      return false;
+    }
+  }, [clearAuth, persistAuth]);
+
+  // On mount: silently verify the stored token with the backend.
+  // On 401 → clear stale credentials so the login page is shown.
+  // On network error → trust the stored token (backend may be temporarily down).
+  useEffect(() => {
+    refreshUser();
+  }, [refreshUser]);
+
+  useEffect(() => {
+    if (!token) return;
+    const refreshOnFocus = () => {
+      if (document.visibilityState === "visible") refreshUser();
+    };
+    const intervalId = window.setInterval(refreshUser, 30000);
+    window.addEventListener("focus", refreshUser);
+    document.addEventListener("visibilitychange", refreshOnFocus);
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshUser);
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+    };
+  }, [refreshUser, token]);
 
   const updateUser = useCallback((partial) => {
     setUser(prev => {
@@ -81,12 +88,16 @@ export function AuthProvider({ children }) {
     });
   }, []);
 
-  const login = useCallback(async (email, password) => {
+  const completeLogin = useCallback((tok, usr) => {
+    persistAuth(tok, usr);
+  }, [persistAuth]);
+
+  const login = useCallback(async (email, password, captcha) => {
     setAuthLoading(true);
     setAuthError(null);
     const AUTH_URL = getAuthUrl();
     try {
-      const res = await axios.post(`${AUTH_URL}/login`, { email, password });
+      const res = await axios.post(`${AUTH_URL}/login`, { email, password, captcha });
       if (res.data.password_weak) {
         // Don't persist auth yet — return the temp token so the UI can force a password change
         return { password_weak: true, token: res.data.token, user: res.data.user };
@@ -100,15 +111,15 @@ export function AuthProvider({ children }) {
     } finally {
       setAuthLoading(false);
     }
-  }, []);
+  }, [persistAuth]);
 
-  // register(firstName, lastName, email, password, company, inviteToken)
-  const register = useCallback(async (firstName, lastName, email, password, company, inviteToken) => {
+  // register(firstName, lastName, email, password, company, inviteToken, captcha)
+  const register = useCallback(async (firstName, lastName, email, password, company, inviteToken, captcha) => {
     setAuthLoading(true);
     setAuthError(null);
     const AUTH_URL = getAuthUrl();
     try {
-      const res = await axios.post(`${AUTH_URL}/register`, { firstName, lastName, email, password, company, inviteToken });
+      const res = await axios.post(`${AUTH_URL}/register`, { firstName, lastName, email, password, company, inviteToken, captcha });
       if (res.data?.redirectBoardId) {
         localStorage.setItem("retro_redirect_board_id", String(res.data.redirectBoardId));
       }
@@ -121,12 +132,12 @@ export function AuthProvider({ children }) {
     } finally {
       setAuthLoading(false);
     }
-  }, []);
+  }, [persistAuth]);
 
   const isAuthenticated = !!token && !!user;
 
   return (
-    <AuthContext.Provider value={{ user, token, isAuthenticated, authInitialized, authError, authLoading, login, register, logout: clearAuth, updateUser, setAuthError }}>
+    <AuthContext.Provider value={{ user, token, isAuthenticated, authInitialized, authError, authLoading, login, register, completeLogin, logout: clearAuth, updateUser, refreshUser, setAuthError }}>
       {children}
     </AuthContext.Provider>
   );

@@ -3,10 +3,11 @@ import { Eye, EyeOff } from "lucide-react";
 import axios from "axios";
 import { useAuth } from "./AuthContext";
 import { getAuthUrl } from "./config";
+import CaptchaChallenge from "./CaptchaChallenge";
 import "./Auth.css";
 
 export default function LoginPage({ onGoToRegister }) {
-  const { login, authError, authLoading, setAuthError } = useAuth();
+  const { login, completeLogin, authError, authLoading, setAuthError } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -29,6 +30,13 @@ export default function LoginPage({ onGoToRegister }) {
   const [showConfirmNew, setShowConfirmNew] = useState(false);
   const [updateError, setUpdateError] = useState(null);
   const [updating, setUpdating] = useState(false);
+  const [captcha, setCaptcha] = useState({ token: "", answer: "" });
+  const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
+
+  const handleCaptchaChange = React.useCallback((nextCaptcha) => {
+    setCaptcha(nextCaptcha);
+    setAuthError(null);
+  }, [setAuthError]);
 
   React.useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -39,9 +47,15 @@ export default function LoginPage({ onGoToRegister }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!email.trim() || !password) return;
-    const result = await login(email.trim(), password);
+    if (!captcha.token || !captcha.answer.trim()) {
+      setAuthError("Complete the security check.");
+      return;
+    }
+    const result = await login(email.trim(), password, captcha);
     if (result && typeof result === 'object' && result.password_weak) {
       setForceUpdate({ token: result.token, user: result.user });
+    } else if (!result) {
+      setCaptchaReloadKey((key) => key + 1);
     }
   };
 
@@ -113,8 +127,7 @@ export default function LoginPage({ onGoToRegister }) {
         currentPassword: password,
         newPassword,
       }, { headers: { Authorization: `Bearer ${forceUpdate.token}` } });
-      // Password updated — now log them in properly
-      await login(email.trim(), newPassword);
+      completeLogin(forceUpdate.token, forceUpdate.user);
       setForceUpdate(null);
     } catch (err) {
       setUpdateError(err.response?.data?.error || "Failed to update password.");
@@ -305,10 +318,17 @@ export default function LoginPage({ onGoToRegister }) {
             </div>
           </div>
 
+          <CaptchaChallenge
+            value={captcha}
+            onChange={handleCaptchaChange}
+            disabled={authLoading}
+            reloadKey={captchaReloadKey}
+          />
+
           <button
             type="submit"
             className="auth-btn-primary"
-            disabled={authLoading || !email.trim() || !password}
+            disabled={authLoading || !email.trim() || !password || !captcha.token || !captcha.answer.trim()}
           >
             {authLoading ? "Signing in…" : "Sign In"}
           </button>

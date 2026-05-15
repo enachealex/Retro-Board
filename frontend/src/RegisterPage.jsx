@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "./AuthContext";
 import { getApiUrl } from "./config";
+import CaptchaChallenge from "./CaptchaChallenge";
 import axios from "axios";
 import "./Auth.css";
 
@@ -17,14 +18,21 @@ export default function RegisterPage({ onGoToLogin }) {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [company, setCompany] = useState("");
+  const [companyEntryMode, setCompanyEntryMode] = useState("select");
   const [companyOptions, setCompanyOptions] = useState([]);
   const [invitePreview, setInvitePreview] = useState(null);
   const [inviteToken, setInviteToken] = useState("");
   const [loadingInvite, setLoadingInvite] = useState(false);
   const [localError, setLocalError] = useState(null);
+  const [captcha, setCaptcha] = useState({ token: "", answer: "" });
+  const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
 
   const error = localError || authError;
   const passwordsMatch = password === confirmPassword;
+  const companyNames = Array.from(new Set([...companyOptions, invitePreview?.company].filter(Boolean)));
+  const selectedCompanyValue = companyEntryMode === "custom" ? "__custom__" : company;
+  const isCustomCompany = selectedCompanyValue === "__custom__";
+  const isInviteCompanyLocked = !!invitePreview?.company;
   const canSubmit =
     !authLoading &&
     !loadingInvite &&
@@ -35,9 +43,15 @@ export default function RegisterPage({ onGoToLogin }) {
     !!company.trim() &&
     !!password &&
     !!confirmPassword &&
-    passwordsMatch;
+    passwordsMatch &&
+    !!captcha.token &&
+    !!captcha.answer.trim();
 
-  const clearErrors = () => { setLocalError(null); setAuthError(null); };
+  const clearErrors = React.useCallback(() => { setLocalError(null); setAuthError(null); }, [setAuthError]);
+  const handleCaptchaChange = React.useCallback((nextCaptcha) => {
+    setCaptcha(nextCaptcha);
+    clearErrors();
+  }, [clearErrors]);
 
   // Load invite preview and company options on mount
   useEffect(() => {
@@ -66,7 +80,10 @@ export default function RegisterPage({ onGoToLogin }) {
       .then(res => {
         if (cancelled) return;
         setInvitePreview(res.data);
-        if (res.data?.company) setCompany(res.data.company);
+        if (res.data?.company) {
+          setCompany(res.data.company);
+          setCompanyEntryMode("select");
+        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -103,8 +120,13 @@ export default function RegisterPage({ onGoToLogin }) {
       setLocalError("Passwords do not match.");
       return;
     }
+    if (!captcha.token || !captcha.answer.trim()) {
+      setLocalError("Complete the security check.");
+      return;
+    }
 
-    await register(firstName.trim(), lastName.trim(), email.trim(), password, company.trim(), inviteToken);
+    const success = await register(firstName.trim(), lastName.trim(), email.trim(), password, company.trim(), inviteToken, captcha);
+    if (!success) setCaptchaReloadKey((key) => key + 1);
   };
 
   return (
@@ -181,20 +203,33 @@ export default function RegisterPage({ onGoToLogin }) {
 
           <div className="auth-field">
             <label htmlFor="reg-company">Company</label>
-            <input
+            <select
               id="reg-company"
-              type="text"
-              list="company-options"
-              placeholder="Enter your company"
-              value={company}
-              onChange={(e) => { setCompany(e.target.value); clearErrors(); }}
-              disabled={authLoading}
-            />
-            <datalist id="company-options">
-              {companyOptions.map((name) => (
-                <option key={name} value={name} />
+              className="auth-select"
+              value={selectedCompanyValue}
+              onChange={(e) => {
+                const value = e.target.value;
+                setCompanyEntryMode(value === "__custom__" ? "custom" : "select");
+                setCompany(value === "__custom__" ? "" : value);
+                clearErrors();
+              }}
+              disabled={authLoading || isInviteCompanyLocked}
+            >
+              <option value="" disabled>Select a company</option>
+              {companyNames.map((name) => (
+                <option key={name} value={name}>{name}</option>
               ))}
-            </datalist>
+              {!isInviteCompanyLocked && <option value="__custom__">Add a different company</option>}
+            </select>
+            {!isInviteCompanyLocked && isCustomCompany && (
+              <input
+                type="text"
+                placeholder="Enter your company"
+                value={company}
+                onChange={(e) => { setCompany(e.target.value); clearErrors(); }}
+                disabled={authLoading}
+              />
+            )}
           </div>
 
           <div className="auth-field">
@@ -244,6 +279,13 @@ export default function RegisterPage({ onGoToLogin }) {
               </button>
             </div>
           </div>
+
+          <CaptchaChallenge
+            value={captcha}
+            onChange={handleCaptchaChange}
+            disabled={authLoading}
+            reloadKey={captchaReloadKey}
+          />
 
           <button
             type="submit"
