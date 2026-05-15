@@ -16,17 +16,17 @@
   background: #ffffff;
   border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0, 20, 137, 0.35);
-  padding: 40px 44px;
+  padding: 44px 48px;
   width: 100%;
-  max-width: 440px;
+  max-width: 480px;
 }
 
 /* Logo row */
 .auth-logo {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 28px;
+  gap: 12px;
+  margin-bottom: 34px;
 }
 
 .auth-logo-icon {
@@ -36,14 +36,14 @@
 }
 
 .auth-logo-image {
-  width: 28px;
-  height: 28px;
+  width: 40px;
+  height: 40px;
   object-fit: contain;
   display: block;
 }
 
 .auth-logo-text {
-  font-size: 1.05rem;
+  font-size: 1.2rem;
   font-weight: 700;
   color: #001489;
   letter-spacing: 0.01em;
@@ -51,16 +51,17 @@
 
 /* Headings */
 .auth-title {
-  font-size: 1.65rem;
+  font-size: 1.45rem;
   font-weight: 700;
   color: #001489;
-  margin-bottom: 6px;
+  line-height: 1.2;
+  margin-bottom: 8px;
 }
 
 .auth-subtitle {
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   color: #6b778c;
-  margin-bottom: 28px;
+  margin-bottom: 30px;
 }
 
 /* Form */
