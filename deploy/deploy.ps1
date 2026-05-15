@@ -5,9 +5,9 @@
 $ErrorActionPreference = "Continue"
 
 # --- Config ---
-$GITHUB_TOKEN = "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"
-$REPO = "aenache_alrm/Retro-Board-app"
-$BRANCH = "master"
+$GITHUB_TOKEN = $env:RETROBOARD_GITHUB_TOKEN
+$REPO = "enachealex/Retro-Board"
+$BRANCH = "main"
 $SERVER_IP = "192.168.1.48"
 $API_PORT = "5000"
 $DEPLOY_DIR = "C:\RetroBoard"
@@ -74,7 +74,8 @@ function Write-Log($msg) {
 }
 
 function Get-LatestSha {
-    $headers = @{Authorization = "token $GITHUB_TOKEN"; Accept = "application/vnd.github+json"}
+    $headers = @{Accept = "application/vnd.github+json"}
+    if ($GITHUB_TOKEN) { $headers.Authorization = "token $GITHUB_TOKEN" }
     $r = Invoke-RestMethod -Uri "https://api.github.com/repos/$REPO/commits/$BRANCH" -Headers $headers
     return $r.sha
 }
@@ -89,7 +90,8 @@ function Save-DeployedSha($sha) {
 }
 
 function Download-Repo($sha) {
-    $headers = @{Authorization = "token $GITHUB_TOKEN"}
+    $headers = @{}
+    if ($GITHUB_TOKEN) { $headers.Authorization = "token $GITHUB_TOKEN" }
     $zipPath = "$WORK_DIR\repo.zip"
     $extractDir = "$WORK_DIR\extract"
 
