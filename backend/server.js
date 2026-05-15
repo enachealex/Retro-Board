@@ -34,7 +34,7 @@ const emailTransporter = nodemailer.createTransport({
 async function sendWelcomeEmail(firstName, email) {
     try {
         await emailTransporter.sendMail({
-            from: process.env.SMTP_FROM || '"RetroBoard" <noreply@thejumpvault.com>',
+            from: process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>',
             to: email,
             subject: 'Welcome to RetroBoard!',
             html: `
@@ -71,7 +71,7 @@ async function sendWelcomeEmail(firstName, email) {
 async function sendPasswordResetEmail(email, resetUrl) {
         try {
                 await emailTransporter.sendMail({
-                        from: process.env.SMTP_FROM || '"RetroBoard" <noreply@thejumpvault.com>',
+                        from: process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>',
                         to: email,
                         subject: 'Reset your RetroBoard password',
                         html: `
@@ -340,15 +340,23 @@ let pool;
 
 // --- CORS Origins ---
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const CORS_ORIGINS = process.env.CORS_ORIGINS
-    ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
-    : NODE_ENV === 'production'
-      ? (() => { console.error('FATAL: CORS_ORIGINS must be set in production. Exiting.'); process.exit(1); })()
-      : [
-          'http://localhost:5173', 'http://localhost:5000', 'https://localhost:5443',
-          'http://192.168.1.48', 'http://192.168.1.48:5000', 'https://192.168.1.48:5443',
-          'https://retroboard.thejumpvault.com', 'https://thejumpvault.com', 'https://www.thejumpvault.com',
-        ];
+const REQUIRED_PUBLIC_ORIGINS = [
+        'https://retroboard.thejumpvault.com',
+        'https://thejumpvault.com',
+        'https://www.thejumpvault.com',
+];
+
+const CORS_ORIGINS = Array.from(new Set([
+        ...(process.env.CORS_ORIGINS
+                ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
+                : NODE_ENV === 'production'
+                    ? (() => { console.error('FATAL: CORS_ORIGINS must be set in production. Exiting.'); process.exit(1); })()
+                    : [
+                            'http://localhost:5173', 'http://localhost:5000', 'https://localhost:5443',
+                            'http://192.168.1.48', 'http://192.168.1.48:5000', 'https://192.168.1.48:5443',
+                        ]),
+        ...REQUIRED_PUBLIC_ORIGINS,
+]));
 
 const corsOptions = { origin: CORS_ORIGINS, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] };
 
