@@ -216,6 +216,9 @@ const CAPTCHA_TTL_MS = Number.parseInt(process.env.CAPTCHA_TTL_MS || '120000', 1
 const CAPTCHA_LENGTH = 6;
 const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const usedCaptchaNonces = new Map();
+const LANDING_PADS_REQUIRED_STREAK = 5;
+const LANDING_PADS_TTL_MS = Number.parseInt(process.env.LANDING_PADS_TTL_MS || '600000', 10);
+const usedLandingPadTokens = new Map();
 
 function cleanupCaptchaNonces(now = Date.now()) {
     for (const [nonce, expiresAt] of usedCaptchaNonces.entries()) {
@@ -225,6 +228,44 @@ function cleanupCaptchaNonces(now = Date.now()) {
 
 function normalizeCaptchaAnswer(answer) {
     return String(answer || '').replace(/\s+/g, '').toUpperCase();
+}
+
+function cleanupLandingPadTokens(now = Date.now()) {
+    for (const [token, expiresAt] of usedLandingPadTokens.entries()) {
+        if (expiresAt <= now) usedLandingPadTokens.delete(token);
+    }
+}
+
+function verifyLandingPadsOrThrow(captcha) {
+    const token = String(captcha?.token || '');
+    const answer = String(captcha?.answer || '').toLowerCase();
+    const rounds = Number(captcha?.rounds || 0);
+    const startedAt = Number(captcha?.startedAt || 0);
+    const completedAt = Number(captcha?.completedAt || 0);
+    const now = Date.now();
+    cleanupLandingPadTokens(now);
+
+    if (captcha?.type !== 'landing-pads' || answer !== 'complete' || rounds < LANDING_PADS_REQUIRED_STREAK) {
+        const err = new Error('Security check is required.');
+        err.status = 400;
+        throw err;
+    }
+    if (!/^landing-pads:[A-Za-z0-9._:-]{12,160}$/.test(token)) {
+        const err = new Error('Security check is invalid. Please try again.');
+        err.status = 400;
+        throw err;
+    }
+    if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt) || completedAt < startedAt || now - completedAt > LANDING_PADS_TTL_MS) {
+        const err = new Error('Security check expired. Please try again.');
+        err.status = 400;
+        throw err;
+    }
+    if (usedLandingPadTokens.has(token)) {
+        const err = new Error('Security check was already used. Please try again.');
+        err.status = 400;
+        throw err;
+    }
+    usedLandingPadTokens.set(token, now + LANDING_PADS_TTL_MS);
 }
 
 function createCaptchaCode() {
@@ -307,6 +348,11 @@ function createCaptchaChallenge() {
 }
 
 function verifyCaptchaOrThrow(captcha) {
+    if (captcha?.type === 'landing-pads') {
+        verifyLandingPadsOrThrow(captcha);
+        return;
+    }
+
     const token = captcha?.token;
     const answer = normalizeCaptchaAnswer(captcha?.answer);
     if (!token || !answer) {

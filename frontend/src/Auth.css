@@ -250,6 +250,107 @@
   animation: auth-captcha-spin 0.8s linear infinite;
 }
 
+.auth-landing-pads-field {
+  gap: 10px;
+}
+
+.auth-landing-pads-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auth-landing-kicker,
+.auth-landing-count {
+  color: #001489;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-landing-count {
+  color: #44546f;
+}
+
+.auth-landing-pads-panel {
+  border: 1.5px solid #d8e1f2;
+  border-radius: 16px;
+  background: #f8fbff;
+  padding: 18px;
+}
+
+.auth-landing-title {
+  color: #001489;
+  font-size: 1.1rem;
+  font-weight: 800;
+  line-height: 1.2;
+  margin: 0 0 6px;
+}
+
+.auth-landing-prompt,
+.auth-landing-streak {
+  color: #44546f;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.auth-landing-pads-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0 14px;
+}
+
+.auth-landing-pad {
+  aspect-ratio: 1 / 0.92;
+  min-height: 82px;
+  border: 1.5px solid #c7d2e5;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #172b4d;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 800;
+  transition: background 0.16s, border-color 0.16s, box-shadow 0.16s, color 0.16s, transform 0.1s;
+}
+
+.auth-landing-pad:hover:not(:disabled),
+.auth-landing-pad:focus-visible {
+  border-color: #00A3FF;
+  box-shadow: 0 0 0 3px rgba(0, 163, 255, 0.16);
+  outline: none;
+}
+
+.auth-landing-pad:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.auth-landing-pad:disabled {
+  cursor: not-allowed;
+}
+
+.auth-landing-pad-cue {
+  background: #dff6ff;
+  border-color: #00A3FF;
+  box-shadow: 0 0 0 3px rgba(0, 163, 255, 0.18), 0 0 24px rgba(0, 163, 255, 0.35);
+  color: #001489;
+}
+
+.auth-landing-pad-hit {
+  background: #dcfff1;
+  border-color: #1f845a;
+  color: #164b35;
+}
+
+.auth-landing-pad-miss {
+  background: #ffebe6;
+  border-color: #de350b;
+  color: #5f1b00;
+}
+
 @keyframes auth-captcha-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
@@ -496,6 +597,56 @@ body.dark-theme .auth-error {
   background: #3a1a1a;
   border-color: #ff5630;
   color: #ff8c6b;
+}
+
+body.dark-theme .auth-landing-kicker {
+  color: #c5d1ea;
+}
+
+body.dark-theme .auth-landing-count,
+body.dark-theme .auth-landing-prompt,
+body.dark-theme .auth-landing-streak {
+  color: #c5d1ea;
+}
+
+body.dark-theme .auth-landing-pads-panel {
+  background: #101727;
+  border-color: #31405f;
+}
+
+body.dark-theme .auth-landing-title {
+  color: #ffffff;
+}
+
+body.dark-theme .auth-landing-pad {
+  background: #182234;
+  border-color: #31405f;
+  color: #ffffff;
+}
+
+body.dark-theme .auth-landing-pad:hover:not(:disabled),
+body.dark-theme .auth-landing-pad:focus-visible {
+  border-color: #7bc7ff;
+  box-shadow: 0 0 0 3px rgba(123, 199, 255, 0.18);
+}
+
+body.dark-theme .auth-landing-pad-cue {
+  background: #153d5a;
+  border-color: #7bc7ff;
+  color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(123, 199, 255, 0.18), 0 0 28px rgba(123, 199, 255, 0.32);
+}
+
+body.dark-theme .auth-landing-pad-hit {
+  background: #123f2a;
+  border-color: #4bce97;
+  color: #dcfff1;
+}
+
+body.dark-theme .auth-landing-pad-miss {
+  background: #4f1c12;
+  border-color: #ff8f73;
+  color: #ffebe6;
 }
 
 body.dark-theme .auth-btn-secondary {
