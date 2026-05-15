@@ -1515,10 +1515,13 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             return res.status(401).json({ error: 'Invalid email or password' });
         }
         const user = rows[0];
-        // Re-sync admin/master status on every login in case email list changed
-        const shouldBeAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase()) ? 1 : 0;
-        const shouldBeMaster = MASTER_EMAILS.includes(user.email.toLowerCase()) ? 1 : 0;
-        if (user.is_admin !== shouldBeAdmin || user.is_master !== shouldBeMaster) {
+        await Promise.all([reloadAdminEmails(), reloadMasterEmails()]);
+        const emailLower = user.email.toLowerCase();
+        const currentAdmin = user.is_admin === 1 || user.is_admin === true ? 1 : 0;
+        const currentMaster = user.is_master === 1 || user.is_master === true ? 1 : 0;
+        const shouldBeAdmin = (currentAdmin || ADMIN_EMAILS.includes(emailLower)) ? 1 : 0;
+        const shouldBeMaster = (currentMaster || MASTER_EMAILS.includes(emailLower)) ? 1 : 0;
+        if (currentAdmin !== shouldBeAdmin || currentMaster !== shouldBeMaster) {
             await pool.query('UPDATE users SET is_admin = ?, is_master = ? WHERE id = ?', [shouldBeAdmin, shouldBeMaster, user.id]);
             user.is_admin = shouldBeAdmin;
             user.is_master = shouldBeMaster;

@@ -1114,10 +1114,15 @@ app.post('/api/auth/login', async (req, res) => {
         if (result.recordset.length === 0) return res.status(401).json({ error: 'Invalid email or password' });
         const user = result.recordset[0];
 
-        const shouldBeAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase()) ? 1 : 0;
-        const shouldBeMaster = MASTER_EMAILS.includes(user.email.toLowerCase()) ? 1 : 0;
-        const shouldBeOverlord = OVERLORD_EMAILS.includes(user.email.toLowerCase()) ? 1 : 0;
-        if ((user.is_admin ? 1 : 0) !== shouldBeAdmin || (user.is_master ? 1 : 0) !== shouldBeMaster || (user.is_overlord ? 1 : 0) !== shouldBeOverlord) {
+        await Promise.all([reloadAdminEmails(), reloadMasterEmails(), reloadOverlordEmails()]);
+        const emailLower = user.email.toLowerCase();
+        const currentAdmin = user.is_admin ? 1 : 0;
+        const currentMaster = user.is_master ? 1 : 0;
+        const currentOverlord = user.is_overlord ? 1 : 0;
+        const shouldBeAdmin = (currentAdmin || ADMIN_EMAILS.includes(emailLower)) ? 1 : 0;
+        const shouldBeMaster = (currentMaster || MASTER_EMAILS.includes(emailLower)) ? 1 : 0;
+        const shouldBeOverlord = (currentOverlord || OVERLORD_EMAILS.includes(emailLower)) ? 1 : 0;
+        if (currentAdmin !== shouldBeAdmin || currentMaster !== shouldBeMaster || currentOverlord !== shouldBeOverlord) {
             await pool.request()
                 .input('isAdmin', sql.Bit, shouldBeAdmin)
                 .input('isMaster', sql.Bit, shouldBeMaster)
