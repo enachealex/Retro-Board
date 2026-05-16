@@ -107,6 +107,12 @@ export function AuthProvider({ children }) {
     } catch (err) {
       const msg = err.response?.data?.error || "Login failed. Please try again.";
       setAuthError(msg);
+      if (err.response?.data?.code === "EMAIL_NOT_VERIFIED") {
+        return {
+          emailVerificationRequired: true,
+          email: err.response.data.email || email,
+        };
+      }
       return false;
     } finally {
       setAuthLoading(false);
@@ -122,6 +128,12 @@ export function AuthProvider({ children }) {
       const res = await axios.post(`${AUTH_URL}/register`, { firstName, lastName, email, password, company, inviteToken, captcha });
       if (res.data?.redirectBoardId) {
         localStorage.setItem("retro_redirect_board_id", String(res.data.redirectBoardId));
+      }
+      if (res.data?.emailVerificationRequired) {
+        return res.data;
+      }
+      if (!res.data?.token || !res.data?.user) {
+        return res.data || true;
       }
       persistAuth(res.data.token, res.data.user);
       return true;

@@ -8,10 +8,12 @@ const emailTransporter = nodemailer.createTransport({
     tls: process.env.SMTP_INSECURE_TLS === 'true' ? { rejectUnauthorized: false } : undefined
 });
 
+  const EMAIL_FROM = process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>';
+
 async function sendWelcomeEmail(firstName, email) {
     try {
         await emailTransporter.sendMail({
-            from: process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>',
+          from: EMAIL_FROM,
             to: email,
             subject: 'Welcome to RetroBoard!',
             html: `

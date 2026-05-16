@@ -39,6 +39,17 @@ const emailTransporter = nodemailer.createTransport({
     tls: SMTP_INSECURE_TLS ? { rejectUnauthorized: false } : undefined
 });
 
+const EMAIL_FROM = process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>';
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
 const PASSWORD_RESET_FALLBACK_KEY = String(process.env.PASSWORD_RESET_FALLBACK_KEY || '');
 
 function isValidFallbackKey(candidate) {
@@ -51,8 +62,10 @@ function isValidFallbackKey(candidate) {
 
 async function sendWelcomeEmail(firstName, email) {
     try {
+        const safeFirstName = escapeHtml(firstName);
+        const safeEmail = escapeHtml(email);
         await emailTransporter.sendMail({
-            from: process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>',
+            from: EMAIL_FROM,
             to: email,
             subject: 'Welcome to RetroBoard!',
             html: `
@@ -66,9 +79,9 @@ async function sendWelcomeEmail(firstName, email) {
         <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; RetroBoard</span>
       </td></tr>
       <tr><td style="padding:36px;">
-        <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Welcome, ${firstName}!</h1>
+            <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Welcome, ${safeFirstName}!</h1>
         <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 20px;">Your account has been created. You can now sign in and access your team's retrospective boards.</p>
-        <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 28px;">Sign in with your email address: <strong>${email}</strong></p>
+            <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 28px;">Sign in with your email address: <strong>${safeEmail}</strong></p>
         <p style="color:#888;font-size:13px;margin:0;">If you didn't create this account, please contact your team administrator.</p>
       </td></tr>
       <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
@@ -86,13 +99,53 @@ async function sendWelcomeEmail(firstName, email) {
     }
 }
 
+async function sendEmailVerificationEmail(firstName, email, verificationUrl, expiresInHours) {
+    const safeFirstName = escapeHtml(firstName || 'there');
+    const safeEmail = escapeHtml(email);
+    const safeUrl = escapeHtml(verificationUrl);
+    await emailTransporter.sendMail({
+    from: EMAIL_FROM,
+    to: email,
+    subject: 'Confirm your Vault Jump Retro account',
+    html: `
+<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#f4f6fa;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fa;padding:40px 0;">
+    <tr><td align="center">
+        <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+            <tr><td style="background:#001489;padding:28px 36px;">
+                <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
+            </td></tr>
+            <tr><td style="padding:36px;">
+                <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Confirm your email</h1>
+                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 18px;">Hi ${safeFirstName}, confirm this email address to finish creating your Vault Jump Retro account.</p>
+                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 24px;">Account email: <strong>${safeEmail}</strong></p>
+                <p style="margin:0 0 28px;"><a href="${safeUrl}" style="display:inline-block;background:#001489;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:600;">Confirm Email</a></p>
+                <p style="color:#666;font-size:13px;line-height:1.5;margin:0 0 12px;">This link expires in ${expiresInHours} hours. If the button does not work, paste this link into your browser:</p>
+                <p style="color:#001489;font-size:12px;line-height:1.5;word-break:break-all;margin:0 0 22px;">${safeUrl}</p>
+                <p style="color:#888;font-size:13px;margin:0;">If you did not create this account, you can ignore this email.</p>
+            </td></tr>
+            <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
+                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span>
+            </td></tr>
+        </table>
+    </td></tr>
+</table>
+</body>
+</html>`
+    });
+}
+
 async function sendPasswordResetEmail(email, resetUrl) {
-        try {
-                await emailTransporter.sendMail({
-                        from: process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>',
-                        to: email,
-                        subject: 'Reset your RetroBoard password',
-                        html: `
+    try {
+        const safeEmail = escapeHtml(email);
+        const safeUrl = escapeHtml(resetUrl);
+        await emailTransporter.sendMail({
+            from: EMAIL_FROM,
+            to: email,
+            subject: 'Reset your RetroBoard password',
+            html: `
 <!DOCTYPE html>
 <html>
 <body style="margin:0;padding:0;background:#f4f6fa;font-family:Arial,sans-serif;">
@@ -104,9 +157,11 @@ async function sendPasswordResetEmail(email, resetUrl) {
             </td></tr>
             <tr><td style="padding:36px;">
                 <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Password reset requested</h1>
-                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 20px;">A password reset was requested for your account.</p>
-                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 24px;">Use the link below to set a new password:</p>
-                <p style="margin:0 0 28px;"><a href="${resetUrl}" style="display:inline-block;background:#001489;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:600;">Reset Password</a></p>
+                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 16px;">A password reset was requested for <strong>${safeEmail}</strong>.</p>
+                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 24px;">Use the link below to open the secure password reset page and set a new password.</p>
+                <p style="margin:0 0 28px;"><a href="${safeUrl}" style="display:inline-block;background:#001489;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:600;">Reset Password</a></p>
+                <p style="color:#666;font-size:13px;line-height:1.5;margin:0 0 12px;">This link expires in ${RESET_TOKEN_EXPIRY_MINUTES} minutes. If the button does not work, paste this link into your browser:</p>
+                <p style="color:#001489;font-size:12px;line-height:1.5;word-break:break-all;margin:0 0 22px;">${safeUrl}</p>
                 <p style="color:#888;font-size:13px;margin:0;">If you did not request this, you can ignore this email.</p>
             </td></tr>
             <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
@@ -117,17 +172,17 @@ async function sendPasswordResetEmail(email, resetUrl) {
 </table>
 </body>
 </html>`
-                });
-                console.log(`Password reset email sent to ${email}`);
-        } catch (err) {
-            console.error('Failed to send password reset email:', {
-                message: err.message,
-                code: err.code,
-                command: err.command,
-                responseCode: err.responseCode,
-            });
-                throw err; // propagate so the caller can report the failure
-        }
+        });
+        console.log(`Password reset email sent to ${email}`);
+    } catch (err) {
+        console.error('Failed to send password reset email:', {
+            message: err.message,
+            code: err.code,
+            command: err.command,
+            responseCode: err.responseCode,
+        });
+        throw err; // propagate so the caller can report the failure
+    }
 }
 
 // --- Admin email allowlist ---
@@ -170,9 +225,14 @@ if (process.env.JWT_SECRET.length < 32) {
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRY = '7d';
 const RESET_TOKEN_EXPIRY_MINUTES = parseInt(process.env.RESET_TOKEN_EXPIRY_MINUTES || '30', 10);
+const EMAIL_VERIFICATION_EXPIRY_HOURS = Number.parseInt(process.env.EMAIL_VERIFICATION_EXPIRY_HOURS || '48', 10);
 
 function createRandomToken(size = 32) {
     return crypto.randomBytes(size).toString('hex');
+}
+
+function hashToken(token) {
+    return crypto.createHash('sha256').update(token).digest('hex');
 }
 
 const INVITE_LINK_TIMEZONE = 'America/Los_Angeles';
@@ -269,6 +329,7 @@ function buildUserToken(user) {
         company: user.company || '',
         department: user.department,
         lead: user.lead || null,
+        email_verified: !!user.email_verified_at,
         is_admin: user.is_admin === 1 || user.is_admin === true,
         is_master: user.is_master === 1 || user.is_master === true,
     }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
@@ -284,6 +345,7 @@ function buildUserPublic(user) {
         company: user.company || '',
         department: user.department,
         lead: user.lead || null,
+        email_verified: !!user.email_verified_at,
         is_admin: user.is_admin === 1 || user.is_admin === true,
         is_master: user.is_master === 1 || user.is_master === true
     };
@@ -295,7 +357,7 @@ function verifyJwt(token) {
 }
 async function getCurrentUserForAuth(userId) {
     const [rows] = await pool.query(
-        `SELECT u.id, u.username, u.first_name, u.last_name, u.display_name, u.email, u.company, u.department, u.\`lead\`, u.is_admin, u.is_master,
+        `SELECT u.id, u.username, u.first_name, u.last_name, u.display_name, u.email, u.company, u.department, u.\`lead\`, u.email_verified_at, u.is_admin, u.is_master,
                 CASE WHEN me.email IS NULL THEN 0 ELSE 1 END AS listed_master,
                 CASE WHEN ae.email IS NULL THEN 0 ELSE 1 END AS listed_admin
          FROM users u
@@ -540,6 +602,7 @@ async function authMiddleware(req, res, next) {
     try {
         const currentUser = await getCurrentUserForAuth(payload.sub);
         if (!currentUser) return res.status(401).json({ error: 'User no longer exists' });
+        if (!currentUser.email_verified_at) return res.status(403).json({ error: 'Please confirm your email before continuing.' });
         req.user = {
             ...payload,
             ...buildUserPublic(currentUser),
@@ -743,6 +806,7 @@ const initDb = async () => {
                 \`lead\` VARCHAR(150) DEFAULT NULL,
                 is_admin TINYINT(1) NOT NULL DEFAULT 0,
                 is_master TINYINT(1) NOT NULL DEFAULT 0,
+                email_verified_at DATETIME DEFAULT NULL,
                 password_hash VARCHAR(255) NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -755,11 +819,25 @@ const initDb = async () => {
             `ALTER TABLE users ADD COLUMN \`lead\` VARCHAR(150) DEFAULT NULL AFTER department`,
             `ALTER TABLE users ADD COLUMN is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER \`lead\``,
             `ALTER TABLE users ADD COLUMN is_master TINYINT(1) NOT NULL DEFAULT 0 AFTER is_admin`,
+            `ALTER TABLE users ADD COLUMN email_verified_at DATETIME DEFAULT NULL AFTER is_master`,
             `ALTER TABLE users ADD COLUMN first_name VARCHAR(100) NOT NULL DEFAULT '' AFTER username`,
             `ALTER TABLE users ADD COLUMN last_name VARCHAR(100) NOT NULL DEFAULT '' AFTER first_name`,
         ];
         for (const sql of userMigrations) {
             try { await pool.query(sql); } catch (e) { /* column already exists */ }
+        }
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS role_seed_state (
+                role_key VARCHAR(50) NOT NULL PRIMARY KEY,
+                seeded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        const [emailBackfillRows] = await pool.query('SELECT role_key FROM role_seed_state WHERE role_key = ?', ['email_verification_backfill']);
+        if (emailBackfillRows.length === 0) {
+            try {
+                await pool.query(`UPDATE users SET email_verified_at = COALESCE(email_verified_at, created_at, NOW()) WHERE password_hash IS NOT NULL`);
+                await pool.query('INSERT IGNORE INTO role_seed_state (role_key) VALUES (?)', ['email_verification_backfill']);
+            } catch (e) { /* ignore */ }
         }
 
         // Expand department ENUM to include QA and SE
@@ -1059,6 +1137,18 @@ const initDb = async () => {
             )
         `);
 
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS email_verification_tokens (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id INT NOT NULL,
+                token_hash VARCHAR(128) NOT NULL UNIQUE,
+                expires_at DATETIME NOT NULL,
+                used_at DATETIME DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        `);
+
         // Auto-seed: ensure all admins are members of their own lead board (Retro - {first} {last})
         const [allAdmins] = await pool.query('SELECT id, first_name, last_name, email, department, is_master FROM users WHERE is_admin = 1 AND is_master = 0 AND password_hash IS NOT NULL');
         for (const admin of allAdmins) {
@@ -1112,6 +1202,7 @@ const initDb = async () => {
             'CREATE INDEX IF NOT EXISTS idx_users_company ON users (company)',
             'CREATE INDEX IF NOT EXISTS idx_board_invites_token ON board_invites (token)',
             'CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_hash ON password_reset_tokens (token_hash)',
+            'CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_hash ON email_verification_tokens (token_hash)',
         ];
         for (const idx of indexes) {
             try { await pool.query(idx); } catch (e) { /* index may already exist */ }
@@ -1183,7 +1274,8 @@ const broadcastBoardsUpdate = async () => {
 };
 
 const getAppBaseUrl = () => {
-    if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL;
+    if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/$/, '');
+    if (NODE_ENV === 'production') return 'https://retroboard.thejumpvault.com';
     const firstOrigin = (CORS_ORIGINS && CORS_ORIGINS.length > 0) ? CORS_ORIGINS[0] : `http://localhost:${PORT}`;
     return firstOrigin.replace(/\/$/, '');
 };
@@ -1200,6 +1292,28 @@ const getRequestBaseUrl = (req) => {
     if (!host) return getAppBaseUrl();
     return `${protocol}://${host}`.replace(/\/$/, '');
 };
+
+async function issueEmailVerification(user) {
+    const token = createRandomToken(24);
+    const tokenHash = hashToken(token);
+    await pool.query('UPDATE email_verification_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL', [user.id]);
+    await pool.query(
+        'INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? HOUR))',
+        [user.id, tokenHash, EMAIL_VERIFICATION_EXPIRY_HOURS]
+    );
+    const verificationUrl = `${getAppBaseUrl()}/?verify=${encodeURIComponent(token)}`;
+    await sendEmailVerificationEmail(user.first_name || user.display_name || 'there', user.email, verificationUrl, EMAIL_VERIFICATION_EXPIRY_HOURS);
+    return { token, verificationUrl };
+}
+
+function emailVerificationResponse(user, extra = {}) {
+    return {
+        success: true,
+        emailVerificationRequired: true,
+        email: user.email,
+        ...extra,
+    };
+}
 
 // --- Board Authorization Helpers ---
 async function getBoardForAuth(boardId) {
@@ -1434,7 +1548,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
             }
         }
 
-        const [existingEmail] = await pool.query('SELECT id, password_hash FROM users WHERE email = ?', [emailLower]);
+        const [existingEmail] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [emailLower]);
 
         // If user was pre-added by a master (null password_hash), allow self-registration to complete the account
         if (existingEmail.length > 0 && !isMasterAdd && existingEmail[0].password_hash === null) {
@@ -1443,12 +1557,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
             const last_name = lastName.trim();
             const display_name = `${first_name} ${last_name}`;
             await pool.query(
-                'UPDATE users SET first_name = ?, last_name = ?, display_name = ?, password_hash = ?, company = COALESCE(?, company), department = COALESCE(?, department), `lead` = COALESCE(?, `lead`) WHERE id = ?',
+                'UPDATE users SET first_name = ?, last_name = ?, display_name = ?, password_hash = ?, email_verified_at = NULL, company = COALESCE(?, company), department = COALESCE(?, department), `lead` = COALESCE(?, `lead`) WHERE id = ?',
                 [first_name, last_name, display_name, password_hash, company || null, department || null, lead || null, existingEmail[0].id]
             );
             const [updated] = await pool.query('SELECT * FROM users WHERE id = ?', [existingEmail[0].id]);
             const user = updated[0];
-            const token = buildUserToken(user);
 
             // Create default board for newly completed admin accounts
             if (user.is_admin || user.is_master) {
@@ -1461,7 +1574,13 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
                 await pool.query('UPDATE board_invites SET status = \'ACCEPTED\', accepted_by_user_id = ?, decided_at = NOW() WHERE id = ?', [user.id, inviteRecord.id]);
             }
 
-            return res.status(200).json({ token, user: buildUserPublic(user), redirectBoardId: inviteRecord?.board_id || null });
+            await issueEmailVerification(user);
+            return res.status(200).json(emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null }));
+        }
+
+        if (existingEmail.length > 0 && !isMasterAdd && !existingEmail[0].email_verified_at) {
+            await issueEmailVerification(existingEmail[0]);
+            return res.status(200).json(emailVerificationResponse(existingEmail[0]));
         }
 
         if (existingEmail.length > 0) {
@@ -1513,8 +1632,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
                 throw insertErr; // unexpected error — rethrow to outer catch
             }
         }
-        const newUser = { id: result.insertId, username, first_name, last_name, display_name, email: emailLower, company: finalCompany, department: finalDept, lead: finalLead, is_admin, is_master };
-        const token = buildUserToken(newUser);
+        const newUser = { id: result.insertId, username, first_name, last_name, display_name, email: emailLower, company: finalCompany, department: finalDept, lead: finalLead, is_admin, is_master, email_verified_at: null };
 
         await pool.query('INSERT IGNORE INTO companies (name) VALUES (?)', [finalCompany]);
 
@@ -1553,9 +1671,13 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
             await pool.query('UPDATE board_invites SET status = \'ACCEPTED\', accepted_by_user_id = ?, decided_at = NOW() WHERE id = ?', [result.insertId, inviteRecord.id]);
         }
 
-        // Send welcome email (non-blocking)
-        sendWelcomeEmail(first_name, emailLower);
-        res.status(201).json({ token, user: buildUserPublic(newUser), redirectBoardId: inviteRecord?.board_id || null });
+        if (isMasterAdd) {
+            sendWelcomeEmail(first_name, emailLower);
+            return res.status(201).json({ success: true, user: buildUserPublic(newUser) });
+        }
+
+        await issueEmailVerification(newUser);
+        res.status(201).json(emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null }));
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
         console.error('Register error:', error);
@@ -1595,6 +1717,13 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         if (!valid) {
             return res.status(401).json({ error: 'Invalid email or password' });
         }
+        if (!user.email_verified_at) {
+            return res.status(403).json({
+                code: 'EMAIL_NOT_VERIFIED',
+                email: user.email,
+                error: 'Please confirm your email before signing in. Check your inbox for the confirmation link.',
+            });
+        }
         const token = buildUserToken(user);
         // Flag weak passwords so the frontend can force an update
         const password_weak = typeof password === 'string' && password.length < 6;
@@ -1603,6 +1732,51 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         if (error.status) return res.status(error.status).json({ error: error.message });
         console.error('Login error:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+app.post('/api/auth/verify-email', authLimiter, async (req, res) => {
+    const token = String(req.body?.token || '').trim();
+    if (!token) return res.status(400).json({ error: 'Verification token is required' });
+
+    try {
+        const tokenHash = hashToken(token);
+        const [rows] = await pool.query(
+            `SELECT evt.id AS token_id, u.*
+             FROM email_verification_tokens evt
+             JOIN users u ON u.id = evt.user_id
+             WHERE evt.token_hash = ? AND evt.used_at IS NULL AND evt.expires_at > NOW()
+             LIMIT 1`,
+            [tokenHash]
+        );
+        if (rows.length === 0) return res.status(400).json({ error: 'Invalid or expired confirmation link' });
+
+        const user = rows[0];
+        await pool.query('UPDATE users SET email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = ?', [user.id]);
+        await pool.query('UPDATE email_verification_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL', [user.id]);
+        sendWelcomeEmail(user.first_name || user.display_name || 'there', user.email);
+        res.json({ success: true, email: user.email });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/auth/resend-verification', authLimiter, async (req, res) => {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: 'email is required' });
+
+    try {
+        const [rows] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
+        if (rows.length === 0 || rows[0].email_verified_at) {
+            return res.json({ success: true });
+        }
+
+        await issueEmailVerification(rows[0]);
+        res.json({ success: true });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
+        res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
     }
 });
 
@@ -1633,7 +1807,7 @@ app.post('/api/auth/request-password-reset', authLimiter, async (req, res) => {
 
         const user = rows[0];
         const token = createRandomToken(24);
-        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        const tokenHash = hashToken(token);
         await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL', [user.id]);
         await pool.query(
             'INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE))',
@@ -1668,7 +1842,7 @@ app.post('/api/auth/reset-password', passwordLimiter, async (req, res) => {
     if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
 
     try {
-        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        const tokenHash = hashToken(token);
         const [rows] = await pool.query(
             `SELECT prt.id, prt.user_id
              FROM password_reset_tokens prt
@@ -1679,7 +1853,7 @@ app.post('/api/auth/reset-password', passwordLimiter, async (req, res) => {
         if (rows.length === 0) return res.status(400).json({ error: 'Invalid or expired reset link' });
 
         const password_hash = await hashPassword(newPassword);
-        await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [password_hash, rows[0].user_id]);
+        await pool.query('UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = ?', [password_hash, rows[0].user_id]);
         await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?', [rows[0].id]);
         res.json({ success: true });
     } catch (error) {

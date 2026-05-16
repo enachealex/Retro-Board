@@ -53,12 +53,17 @@ export default function LoginPage({ onGoToRegister }) {
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotMessage, setForgotMessage] = useState(null);
   const [forgotLoading, setForgotLoading] = useState(false);
+  const [verificationResendEmail, setVerificationResendEmail] = useState("");
+  const [verificationResendMessage, setVerificationResendMessage] = useState(null);
+  const [verificationResendLoading, setVerificationResendLoading] = useState(false);
 
   const [resetToken, setResetToken] = useState("");
   const [resetPassword, setResetPassword] = useState("");
   const [resetConfirm, setResetConfirm] = useState("");
   const [resetError, setResetError] = useState(null);
   const [resetLoading, setResetLoading] = useState(false);
+  const [verifyToken, setVerifyToken] = useState("");
+  const [verifyStatus, setVerifyStatus] = useState({ loading: false, success: false, error: null, email: "" });
 
   // Forced password update state
   const [forceUpdate, setForceUpdate] = useState(null); // { token, user }
@@ -78,10 +83,40 @@ export default function LoginPage({ onGoToRegister }) {
   }, [setAuthError]);
 
   React.useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(globalThis.location.search);
     const token = params.get('reset') || '';
     if (token) setResetToken(token);
+    const emailToken = params.get('verify') || '';
+    if (emailToken) setVerifyToken(emailToken);
   }, []);
+
+  React.useEffect(() => {
+    if (!verifyToken) return;
+    let cancelled = false;
+    setVerifyStatus({ loading: true, success: false, error: null, email: "" });
+    axios.post(`${getAuthUrl()}/verify-email`, { token: verifyToken })
+      .then((res) => {
+        if (cancelled) return;
+        const verifiedEmail = res.data?.email || "";
+        setVerifyStatus({ loading: false, success: true, error: null, email: verifiedEmail });
+        if (verifiedEmail) setEmail(verifiedEmail);
+        const params = new URLSearchParams(globalThis.location.search);
+        params.delete('verify');
+        const qs = params.toString();
+        const cleanUrl = qs ? `${globalThis.location.pathname}?${qs}` : globalThis.location.pathname;
+        globalThis.history.replaceState({}, '', cleanUrl);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setVerifyStatus({
+          loading: false,
+          success: false,
+          error: err.response?.data?.error || "Could not confirm this email link.",
+          email: "",
+        });
+      });
+    return () => { cancelled = true; };
+  }, [verifyToken]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -93,6 +128,8 @@ export default function LoginPage({ onGoToRegister }) {
       const result = await login(email.trim(), password, sessionProof);
       if (result && typeof result === 'object' && result.password_weak) {
         setForceUpdate({ token: result.token, user: result.user });
+      } else if (result?.emailVerificationRequired) {
+        setVerificationResendEmail(result.email || email.trim());
       }
       return;
     }
@@ -113,6 +150,9 @@ export default function LoginPage({ onGoToRegister }) {
     const result = await login(email.trim(), password, sessionProof);
     if (result && typeof result === 'object' && result.password_weak) {
       setForceUpdate({ token: result.token, user: result.user });
+    } else if (result?.emailVerificationRequired) {
+      setVerificationResendEmail(result.email || email.trim());
+      setSecurityStep(false);
     } else if (!result) {
       setSecurityStep(false);
       setCaptcha({ token: "", answer: "" });
@@ -144,6 +184,21 @@ export default function LoginPage({ onGoToRegister }) {
     }
   };
 
+  const handleResendVerification = async () => {
+    const targetEmail = (verificationResendEmail || email).trim();
+    if (!targetEmail) return;
+    setVerificationResendLoading(true);
+    setVerificationResendMessage(null);
+    try {
+      await axios.post(`${getAuthUrl()}/resend-verification`, { email: targetEmail });
+      setVerificationResendMessage("If that account still needs confirmation, a new link has been sent.");
+    } catch (err) {
+      setVerificationResendMessage(err.response?.data?.error || "Could not send a confirmation email right now.");
+    } finally {
+      setVerificationResendLoading(false);
+    }
+  };
+
   const handleTokenResetSubmit = async (e) => {
     e.preventDefault();
     setResetError(null);
@@ -161,11 +216,11 @@ export default function LoginPage({ onGoToRegister }) {
         token: resetToken,
         newPassword: resetPassword,
       });
-      const params = new URLSearchParams(window.location.search);
+      const params = new URLSearchParams(globalThis.location.search);
       params.delete('reset');
       const qs = params.toString();
-      const cleanUrl = `${window.location.pathname}${qs ? `?${qs}` : ''}`;
-      window.history.replaceState({}, '', cleanUrl);
+      const cleanUrl = qs ? `${globalThis.location.pathname}?${qs}` : globalThis.location.pathname;
+      globalThis.history.replaceState({}, '', cleanUrl);
       setResetToken("");
       setPassword(resetPassword);
       setForgotMessage("Password reset successful. You can now sign in.");
@@ -265,6 +320,57 @@ export default function LoginPage({ onGoToRegister }) {
               {updating ? "Updating…" : "Update Password"}
             </button>
           </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (verifyToken) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="auth-logo">
+            <img
+              className="auth-logo-image"
+              src="/vault-jump.png"
+              alt="Vault Jump Retro logo"
+            />
+            <span className="auth-logo-text">Vault Jump Retro</span>
+          </div>
+          <h2 className="auth-title">Email Confirmation</h2>
+          <p className="auth-subtitle">Confirming your Vault Jump Retro account.</p>
+
+          {verifyStatus.loading && <output className="auth-info">Confirming your email...</output>}
+          {verifyStatus.success && <output className="auth-info">Email confirmed. You can now sign in.</output>}
+          {verifyStatus.error && <div className="auth-error" role="alert">{verifyStatus.error}</div>}
+
+          {verifyStatus.error && (
+            <div className="auth-form">
+              <div className="auth-field">
+                <label htmlFor="verify-resend-email">Email</label>
+                <input
+                  id="verify-resend-email"
+                  type="email"
+                  value={verificationResendEmail || email}
+                  onChange={(e) => setVerificationResendEmail(e.target.value)}
+                  disabled={verificationResendLoading}
+                />
+              </div>
+              {verificationResendMessage && <div className="auth-info">{verificationResendMessage}</div>}
+              <button
+                type="button"
+                className="auth-btn-primary"
+                onClick={handleResendVerification}
+                disabled={verificationResendLoading || !(verificationResendEmail || email).trim()}
+              >
+                {verificationResendLoading ? "Sending..." : "Send New Link"}
+              </button>
+            </div>
+          )}
+
+          {verifyStatus.success && (
+            <button type="button" className="auth-btn-primary" onClick={() => setVerifyToken("")}>Sign In</button>
+          )}
         </div>
       </div>
     );
@@ -397,6 +503,20 @@ export default function LoginPage({ onGoToRegister }) {
             </div>
           )}
 
+          {verificationResendEmail && (
+            <div className="auth-form">
+              {verificationResendMessage && <div className="auth-info">{verificationResendMessage}</div>}
+              <button
+                type="button"
+                className="auth-btn-secondary"
+                onClick={handleResendVerification}
+                disabled={verificationResendLoading}
+              >
+                {verificationResendLoading ? "Sending..." : "Send New Confirmation Link"}
+              </button>
+            </div>
+          )}
+
           <div className="auth-field">
             <label htmlFor="login-email">Email</label>
             <input
@@ -406,7 +526,7 @@ export default function LoginPage({ onGoToRegister }) {
               autoComplete="email"
               placeholder="name@example.com"
               value={email}
-              onChange={(e) => { setEmail(e.target.value); setAuthError(null); }}
+              onChange={(e) => { setEmail(e.target.value); setAuthError(null); setVerificationResendEmail(""); setVerificationResendMessage(null); }}
               disabled={authLoading}
             />
           </div>

@@ -27,6 +27,7 @@ export default function RegisterPage({ onGoToLogin }) {
   const [captcha, setCaptcha] = useState({ token: "", answer: "" });
   const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
   const [securityStep, setSecurityStep] = useState(false);
+  const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
 
   const error = localError || authError;
   const passwordsMatch = password === confirmPassword;
@@ -55,7 +56,7 @@ export default function RegisterPage({ onGoToLogin }) {
   // Load invite preview and company options on mount
   useEffect(() => {
     let cancelled = false;
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(globalThis.location.search);
     const invite = params.get('invite') || '';
     if (!cancelled) setInviteToken(invite);
 
@@ -134,8 +135,14 @@ export default function RegisterPage({ onGoToLogin }) {
       return;
     }
 
-    const success = await register(firstName.trim(), lastName.trim(), email.trim(), password, company.trim(), inviteToken, captcha);
-    if (!success) setCaptchaReloadKey((key) => key + 1);
+    const result = await register(firstName.trim(), lastName.trim(), email.trim(), password, company.trim(), inviteToken, captcha);
+    if (result?.emailVerificationRequired) {
+      setPendingVerificationEmail(result.email || email.trim());
+      setSecurityStep(false);
+      setCaptcha({ token: "", answer: "" });
+      return;
+    }
+    if (!result) setCaptchaReloadKey((key) => key + 1);
   };
 
   const handleSecurityBack = () => {
@@ -143,6 +150,33 @@ export default function RegisterPage({ onGoToLogin }) {
     setCaptcha({ token: "", answer: "" });
     clearErrors();
   };
+
+  if (pendingVerificationEmail) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="auth-logo">
+            <img
+              className="auth-logo-image"
+              src="/vault-jump.png"
+              alt="Vault Jump Retro logo"
+            />
+            <span className="auth-logo-text">Vault Jump Retro</span>
+          </div>
+          <h2 className="auth-title">Check Your Email</h2>
+          <p className="auth-subtitle">Confirm your account before signing in.</p>
+
+          <output className="auth-info">
+            A confirmation link was sent to <strong>{pendingVerificationEmail}</strong>.
+          </output>
+
+          <button type="button" className="auth-btn-primary" onClick={onGoToLogin}>
+            Back to Sign In
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (securityStep) {
     return (
@@ -210,7 +244,7 @@ export default function RegisterPage({ onGoToLogin }) {
         <p className="auth-subtitle">{inviteToken ? "Join your board from an invite link" : "Create your Retro Boards account"}</p>
 
         {inviteToken && loadingInvite ? (
-          <div className="auth-info" role="status">Checking invite link...</div>
+          <output className="auth-info">Checking invite link...</output>
         ) : inviteToken && !invitePreview ? (
           <div className="auth-error" role="alert">This invite link is invalid or expired.</div>
         ) : inviteToken && invitePreview.status !== 'PENDING' ? (

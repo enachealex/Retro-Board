@@ -18,10 +18,36 @@ CREATE TABLE users (
     is_master BIT NOT NULL DEFAULT 0,
     is_overlord BIT NOT NULL DEFAULT 0,
     password_hash NVARCHAR(255) NULL,
+    email_verified_at DATETIME2 NULL,
     created_at DATETIME2 DEFAULT GETDATE(),
     CONSTRAINT UQ_users_username UNIQUE (username),
     CONSTRAINT UQ_users_email UNIQUE (email),
     CONSTRAINT CK_users_department CHECK (department IN ('QA','SE','SDET'))
+);
+
+IF COL_LENGTH('users', 'email_verified_at') IS NULL
+    ALTER TABLE users ADD email_verified_at DATETIME2 NULL;
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'email_verification_tokens')
+CREATE TABLE email_verification_tokens (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT NOT NULL,
+    token_hash NVARCHAR(128) NOT NULL UNIQUE,
+    expires_at DATETIME2 NOT NULL,
+    used_at DATETIME2 NULL,
+    created_at DATETIME2 DEFAULT GETDATE(),
+    CONSTRAINT FK_email_verification_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'password_reset_tokens')
+CREATE TABLE password_reset_tokens (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id INT NOT NULL,
+    token_hash NVARCHAR(128) NOT NULL UNIQUE,
+    expires_at DATETIME2 NOT NULL,
+    used_at DATETIME2 NULL,
+    created_at DATETIME2 DEFAULT GETDATE(),
+    CONSTRAINT FK_password_reset_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- 2. Boards

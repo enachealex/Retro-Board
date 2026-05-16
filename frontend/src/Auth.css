@@ -368,6 +368,7 @@
 }
 
 .auth-info {
+  display: block;
   background: #e6f4ff;
   border: 1px solid #00a3ff;
   border-radius: 8px;
