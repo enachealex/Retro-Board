@@ -186,8 +186,39 @@ function verifyJwt(token) {
 async function getCurrentUserForAuth(userId) {
     const result = await pool.request()
         .input('id', sql.Int, userId)
-        .query('SELECT id, username, first_name, last_name, display_name, email, department, [lead], is_admin, is_master, is_overlord FROM users WHERE id = @id');
-    return result.recordset[0] || null;
+        .query(`SELECT u.id, u.username, u.first_name, u.last_name, u.display_name, u.email, u.department, u.[lead], u.is_admin, u.is_master, u.is_overlord,
+                       CASE WHEN me.email IS NULL THEN 0 ELSE 1 END AS listed_master,
+                       CASE WHEN ae.email IS NULL THEN 0 ELSE 1 END AS listed_admin,
+                       CASE WHEN oe.email IS NULL THEN 0 ELSE 1 END AS listed_overlord
+                FROM users u
+                LEFT JOIN master_emails me ON LOWER(me.email) = LOWER(u.email)
+                LEFT JOIN admin_emails ae ON LOWER(ae.email) = LOWER(u.email)
+                LEFT JOIN overlord_emails oe ON LOWER(oe.email) = LOWER(u.email)
+                WHERE u.id = @id`);
+    const user = result.recordset[0];
+    if (!user) return null;
+    const currentMaster = user.is_master ? 1 : 0;
+    const currentAdmin = user.is_admin ? 1 : 0;
+    const currentOverlord = user.is_overlord ? 1 : 0;
+    const shouldBeMaster = (currentMaster || Number(user.listed_master || 0) === 1) ? 1 : 0;
+    const shouldBeOverlord = (currentOverlord || Number(user.listed_overlord || 0) === 1) ? 1 : 0;
+    let shouldBeAdmin = 0;
+    if (!shouldBeMaster && !shouldBeOverlord && (currentAdmin || Number(user.listed_admin || 0) === 1)) shouldBeAdmin = 1;
+    if (currentMaster !== shouldBeMaster || currentAdmin !== shouldBeAdmin || currentOverlord !== shouldBeOverlord) {
+        await pool.request()
+            .input('isAdmin', sql.Bit, shouldBeAdmin)
+            .input('isMaster', sql.Bit, shouldBeMaster)
+            .input('isOverlord', sql.Bit, shouldBeOverlord)
+            .input('id', sql.Int, user.id)
+            .query('UPDATE users SET is_admin = @isAdmin, is_master = @isMaster, is_overlord = @isOverlord WHERE id = @id');
+        user.is_admin = shouldBeAdmin;
+        user.is_master = shouldBeMaster;
+        user.is_overlord = shouldBeOverlord;
+    }
+    delete user.listed_master;
+    delete user.listed_admin;
+    delete user.listed_overlord;
+    return user;
 }
 async function hashPassword(password) {
     const salt = crypto.randomBytes(16).toString('hex');
@@ -555,33 +586,56 @@ const initDb = async () => {
             )
         `);
 
-        // Seed admin emails
-        for (const e of DEFAULT_ADMIN_EMAILS) {
-            const dept = ['nrobertson@openeye.net','gduncan@openeye.net','brogers@openeye.net','jezetta@openeye.net'].includes(e) ? 'QA'
-                       : ['dsmith@openeye.net','smontgomery@openeye.net','arcox@openeye.net','anhumphrey@openeye.net','rbarnes@openeye.net','swinter@openeye.net','zsteele@openeye.net','nelliott@openeye.net','dschafer@openeye.net'].includes(e) ? 'SE'
-                       : ['gfoster@openeye.net','g@openeye.net'].includes(e) ? 'SDET' : null;
-            await pool.request()
-                .input('email', sql.NVarChar(255), e)
-                .input('dept', sql.NVarChar(10), dept)
-                .query(`
-                    IF NOT EXISTS (SELECT 1 FROM admin_emails WHERE email = @email)
-                        INSERT INTO admin_emails (email, department) VALUES (@email, @dept)
-                `);
+        await pool.request().query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'role_seed_state')
+            CREATE TABLE role_seed_state (
+                role_key NVARCHAR(50) NOT NULL PRIMARY KEY,
+                seeded_at DATETIME2 DEFAULT GETDATE()
+            )
+        `);
+
+        // Seed default role allowlists only on first setup so later deletions are respected.
+        const adminSeedState = await pool.request()
+            .input('role', sql.NVarChar(50), 'admin_emails')
+            .query('SELECT role_key FROM role_seed_state WHERE role_key = @role');
+        const adminEmailCount = await pool.request().query('SELECT COUNT(*) AS count FROM admin_emails');
+        if (adminSeedState.recordset.length === 0 && Number(adminEmailCount.recordset[0]?.count || 0) === 0) {
+            for (const e of DEFAULT_ADMIN_EMAILS) {
+                const dept = ['nrobertson@openeye.net','gduncan@openeye.net','brogers@openeye.net','jezetta@openeye.net'].includes(e) ? 'QA'
+                           : ['dsmith@openeye.net','smontgomery@openeye.net','arcox@openeye.net','anhumphrey@openeye.net','rbarnes@openeye.net','swinter@openeye.net','zsteele@openeye.net','nelliott@openeye.net','dschafer@openeye.net'].includes(e) ? 'SE'
+                           : ['gfoster@openeye.net','g@openeye.net'].includes(e) ? 'SDET' : null;
+                await pool.request()
+                    .input('email', sql.NVarChar(255), e)
+                    .input('dept', sql.NVarChar(10), dept)
+                    .query(`
+                        IF NOT EXISTS (SELECT 1 FROM admin_emails WHERE email = @email)
+                            INSERT INTO admin_emails (email, department) VALUES (@email, @dept)
+                    `);
+            }
         }
+        await pool.request()
+            .input('role', sql.NVarChar(50), 'admin_emails')
+            .query(`IF NOT EXISTS (SELECT 1 FROM role_seed_state WHERE role_key = @role) INSERT INTO role_seed_state (role_key) VALUES (@role)`);
         await reloadAdminEmails();
 
-        // Seed master emails (with department)
-        for (const m of DEFAULT_MASTER_EMAILS) {
-            await pool.request()
-                .input('email', sql.NVarChar(255), m.email)
-                .input('dept', sql.NVarChar(10), m.department)
-                .query(`
-                    IF NOT EXISTS (SELECT 1 FROM master_emails WHERE email = @email)
-                        INSERT INTO master_emails (email, department) VALUES (@email, @dept)
-                    ELSE
-                        UPDATE master_emails SET department = @dept WHERE email = @email AND (department IS NULL OR department <> @dept)
-                `);
+        const masterSeedState = await pool.request()
+            .input('role', sql.NVarChar(50), 'master_emails')
+            .query('SELECT role_key FROM role_seed_state WHERE role_key = @role');
+        const masterEmailCount = await pool.request().query('SELECT COUNT(*) AS count FROM master_emails');
+        if (masterSeedState.recordset.length === 0 && Number(masterEmailCount.recordset[0]?.count || 0) === 0) {
+            for (const m of DEFAULT_MASTER_EMAILS) {
+                await pool.request()
+                    .input('email', sql.NVarChar(255), m.email)
+                    .input('dept', sql.NVarChar(10), m.department)
+                    .query(`
+                        IF NOT EXISTS (SELECT 1 FROM master_emails WHERE email = @email)
+                            INSERT INTO master_emails (email, department) VALUES (@email, @dept)
+                    `);
+            }
         }
+                await pool.request()
+                    .input('role', sql.NVarChar(50), 'master_emails')
+                    .query(`IF NOT EXISTS (SELECT 1 FROM role_seed_state WHERE role_key = @role) INSERT INTO role_seed_state (role_key) VALUES (@role)`);
         await reloadMasterEmails();
 
         // Seed overlord emails
@@ -930,6 +984,23 @@ async function createDefaultAdminBoard(firstName, lastName, department, userId) 
     }
 }
 
+async function ensureDefaultAdminBoardMssql(firstName, lastName, department, userId) {
+    const boardName = `Retro - ${firstName} ${lastName}`.trim();
+    const existBoard = await pool.request()
+        .input('name', sql.NVarChar(255), boardName)
+        .query('SELECT id FROM boards WHERE name = @name');
+    if (existBoard.recordset.length === 0) {
+        await createDefaultAdminBoard(firstName, lastName, department, Number.parseInt(userId, 10));
+        return;
+    }
+    await pool.request()
+        .input('boardId', sql.Int, existBoard.recordset[0].id)
+        .input('userId', sql.Int, Number.parseInt(userId, 10))
+        .query(`IF NOT EXISTS (SELECT 1 FROM board_members WHERE board_id = @boardId AND user_id = @userId)
+                INSERT INTO board_members (board_id, user_id) VALUES (@boardId, @userId)`);
+    broadcastBoardsUpdate();
+}
+
 // =====================================================================
 // AUTH ROUTES
 // =====================================================================
@@ -1031,11 +1102,11 @@ app.post('/api/auth/register', async (req, res) => {
             // Only overlords can create other overlords
             is_overlord = (role === 'overlord' && callerIsOverlord) ? 1 : 0;
             is_master = role === 'master' ? 1 : 0;
-            is_admin = role === 'admin' || role === 'master' || (role === 'overlord' && callerIsOverlord) ? 1 : 0;
+            is_admin = role === 'admin' ? 1 : 0;
         } else {
-            is_admin = ADMIN_EMAILS.includes(emailLower) ? 1 : 0;
             is_master = MASTER_EMAILS.includes(emailLower) ? 1 : 0;
             is_overlord = OVERLORD_EMAILS.includes(emailLower) ? 1 : 0;
+            is_admin = !is_master && !is_overlord && ADMIN_EMAILS.includes(emailLower) ? 1 : 0;
         }
         const finalDept = (department && VALID_DEPARTMENTS.includes(department)) ? department : 'QA';
         const finalLead = (role === 'admin' || role === 'master' || skipLead) ? null : (lead || null);
@@ -1074,13 +1145,23 @@ app.post('/api/auth/register', async (req, res) => {
         const newUser = { id: newId, username, first_name, last_name, display_name, email: emailLower, department: finalDept, lead: finalLead, is_admin, is_master, is_overlord };
         const token = buildUserToken(newUser);
 
-        if ((callerIsMaster || callerIsOverlord) && (role === 'admin' || role === 'master')) {
+        if ((callerIsMaster || callerIsOverlord) && role === 'admin') {
             try {
                 await pool.request()
                     .input('email', sql.NVarChar(255), emailLower)
                     .input('dept', sql.NVarChar(10), finalDept)
                     .query(`IF NOT EXISTS (SELECT 1 FROM admin_emails WHERE email = @email) INSERT INTO admin_emails (email, department) VALUES (@email, @dept)`);
                 await reloadAdminEmails();
+            } catch (e) { /* ignore */ }
+        }
+        if ((callerIsMaster || callerIsOverlord) && role === 'master') {
+            try {
+                await pool.request()
+                    .input('email', sql.NVarChar(255), emailLower)
+                    .input('dept', sql.NVarChar(10), finalDept)
+                    .query(`IF NOT EXISTS (SELECT 1 FROM master_emails WHERE email = @email) INSERT INTO master_emails (email, department) VALUES (@email, @dept)`);
+                await pool.request().input('email', sql.NVarChar(255), emailLower).query('DELETE FROM admin_emails WHERE email = @email');
+                await Promise.all([reloadMasterEmails(), reloadAdminEmails()]);
             } catch (e) { /* ignore */ }
         }
 
@@ -1128,9 +1209,10 @@ app.post('/api/auth/login', async (req, res) => {
         const currentAdmin = user.is_admin ? 1 : 0;
         const currentMaster = user.is_master ? 1 : 0;
         const currentOverlord = user.is_overlord ? 1 : 0;
-        const shouldBeAdmin = (currentAdmin || ADMIN_EMAILS.includes(emailLower)) ? 1 : 0;
         const shouldBeMaster = (currentMaster || MASTER_EMAILS.includes(emailLower)) ? 1 : 0;
         const shouldBeOverlord = (currentOverlord || OVERLORD_EMAILS.includes(emailLower)) ? 1 : 0;
+        let shouldBeAdmin = 0;
+        if (!shouldBeMaster && !shouldBeOverlord && (currentAdmin || ADMIN_EMAILS.includes(emailLower))) shouldBeAdmin = 1;
         if (currentAdmin !== shouldBeAdmin || currentMaster !== shouldBeMaster || currentOverlord !== shouldBeOverlord) {
             await pool.request()
                 .input('isAdmin', sql.Bit, shouldBeAdmin)
@@ -1248,7 +1330,7 @@ app.get('/api/leads', async (req, res) => {
             'SELECT display_name, department FROM users WHERE is_admin = 1 AND is_master = 0 ORDER BY display_name'
         );
         const grouped = {};
-        for (const dept of VALID_DEPARTMENTS) grouped[dept] = [...(LEADS_BY_DEPT[dept] || [])];
+        for (const dept of VALID_DEPARTMENTS) grouped[dept] = [];
         for (const r of result.recordset) {
             if (grouped[r.department] && !grouped[r.department].includes(r.display_name)) {
                 grouped[r.department].push(r.display_name);
@@ -1259,10 +1341,39 @@ app.get('/api/leads', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+app.delete('/api/leads', authMiddleware, async (req, res) => {
+    if (!req.user.is_overlord && !req.user.is_master) return res.status(403).json({ error: 'Access denied' });
+    const department = String(req.body?.department || req.query?.department || '').trim();
+    const leadName = String(req.body?.lead || req.query?.lead || '').trim();
+    if (!VALID_DEPARTMENTS.includes(department)) return res.status(400).json({ error: 'Invalid department' });
+    if (!leadName) return res.status(400).json({ error: 'Lead is required' });
+
+    try {
+        const leadUsers = await pool.request()
+            .input('dept', sql.NVarChar(10), department)
+            .input('leadName', sql.NVarChar(150), leadName)
+            .query('SELECT email FROM users WHERE department = @dept AND display_name = @leadName AND is_master = 0');
+        await pool.request()
+            .input('dept', sql.NVarChar(10), department)
+            .input('leadName', sql.NVarChar(150), leadName)
+            .query('UPDATE users SET [lead] = NULL WHERE department = @dept AND [lead] = @leadName');
+        await pool.request()
+            .input('dept', sql.NVarChar(10), department)
+            .input('leadName', sql.NVarChar(150), leadName)
+            .query('UPDATE users SET is_admin = 0 WHERE department = @dept AND display_name = @leadName AND is_master = 0');
+        for (const leadUser of leadUsers.recordset) {
+            await pool.request().input('email', sql.NVarChar(255), leadUser.email).query('DELETE FROM admin_emails WHERE email = @email');
+        }
+        await reloadAdminEmails();
+        broadcastBoardsUpdate();
+        res.json({ success: true });
+    } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
 app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
     if (!req.user.is_overlord && !req.user.is_master) return res.status(403).json({ error: 'Access denied' });
     const { userId } = req.params;
-    const { department, lead, is_admin, is_master, first_name, last_name } = req.body;
+    const { department, lead, is_admin, is_master, first_name, last_name, is_lead } = req.body;
 
     // Master toggle
     if (is_master !== undefined && department === undefined && is_admin === undefined) {
@@ -1280,13 +1391,14 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
                     .input('email', sql.NVarChar(255), userEmail)
                     .input('dept', sql.NVarChar(10), userDept || 'QA')
                     .query(`IF NOT EXISTS (SELECT 1 FROM master_emails WHERE email = @email) INSERT INTO master_emails (email, department) VALUES (@email, @dept)`);
+                await pool.request().input('email', sql.NVarChar(255), userEmail).query('DELETE FROM admin_emails WHERE email = @email');
             } else {
                 await pool.request().input('id', sql.Int, userId).query('UPDATE users SET is_master = 0 WHERE id = @id');
                 await pool.request()
                     .input('email', sql.NVarChar(255), userEmail)
                     .query('DELETE FROM master_emails WHERE email = @email');
             }
-            await reloadMasterEmails();
+            await Promise.all([reloadMasterEmails(), reloadAdminEmails()]);
             res.json({ success: true });
         } catch (error) { res.status(500).json({ error: error.message }); }
         return;
@@ -1341,8 +1453,11 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
     try {
         const currentResult = await pool.request()
             .input('id', sql.Int, userId)
-            .query('SELECT [lead] FROM users WHERE id = @id');
+            .query('SELECT [lead], email, is_master FROM users WHERE id = @id');
+        if (currentResult.recordset.length === 0) return res.status(404).json({ error: 'User not found' });
+        if (is_lead && currentResult.recordset[0].is_master) return res.status(400).json({ error: 'Masters cannot be assigned as leads.' });
         const oldLead = currentResult.recordset.length > 0 ? currentResult.recordset[0].lead : null;
+        const assignedLead = is_lead ? null : lead;
 
         if (first_name !== undefined && last_name !== undefined) {
             const fn = first_name.trim();
@@ -1350,7 +1465,7 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
             const displayName = [fn, ln].filter(Boolean).join(' ');
             await pool.request()
                 .input('dept', sql.NVarChar(10), department)
-                .input('lead', sql.NVarChar(150), lead)
+                .input('lead', sql.NVarChar(150), assignedLead)
                 .input('fn', sql.NVarChar(100), fn)
                 .input('ln', sql.NVarChar(100), ln)
                 .input('dn', sql.NVarChar(150), displayName)
@@ -1359,13 +1474,25 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
         } else {
             await pool.request()
                 .input('dept', sql.NVarChar(10), department)
-                .input('lead', sql.NVarChar(150), lead)
+                .input('lead', sql.NVarChar(150), assignedLead)
                 .input('id', sql.Int, userId)
                 .query('UPDATE users SET department = @dept, [lead] = @lead WHERE id = @id');
         }
 
+        if (is_lead) {
+            const updatedResult = await pool.request().input('id', sql.Int, userId).query('SELECT first_name, last_name, email FROM users WHERE id = @id');
+            const updatedUser = updatedResult.recordset[0];
+            await pool.request().input('id', sql.Int, userId).query('UPDATE users SET is_admin = 1 WHERE id = @id AND is_master = 0');
+            await pool.request()
+                .input('email', sql.NVarChar(255), updatedUser.email)
+                .input('dept', sql.NVarChar(10), department)
+                .query(`IF NOT EXISTS (SELECT 1 FROM admin_emails WHERE email = @email) INSERT INTO admin_emails (email, department) VALUES (@email, @dept)`);
+            await reloadAdminEmails();
+            await ensureDefaultAdminBoardMssql(updatedUser.first_name, updatedUser.last_name, department, userId);
+        }
+
         // Remove from old lead's board
-        if (oldLead && oldLead !== lead) {
+        if (oldLead && oldLead !== assignedLead) {
             const oldBoardName = `Retro - ${oldLead}`;
             const ob = await pool.request().input('name', sql.NVarChar(255), oldBoardName).query('SELECT id FROM boards WHERE name = @name');
             if (ob.recordset.length > 0) {
@@ -1376,8 +1503,8 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
             }
         }
         // Add to new lead's board
-        if (lead) {
-            const lb = await pool.request().input('name', sql.NVarChar(255), `Retro - ${lead}`).query('SELECT id FROM boards WHERE name = @name');
+        if (assignedLead) {
+            const lb = await pool.request().input('name', sql.NVarChar(255), `Retro - ${assignedLead}`).query('SELECT id FROM boards WHERE name = @name');
             if (lb.recordset.length > 0) {
                 await pool.request()
                     .input('boardId', sql.Int, lb.recordset[0].id)
@@ -1428,7 +1555,7 @@ app.post('/api/admin-emails', authMiddleware, async (req, res) => {
             .query('INSERT INTO admin_emails (email, department) VALUES (@email, @dept)');
         await reloadAdminEmails();
         await pool.request().input('email', sql.NVarChar(255), emailLower)
-            .query('UPDATE users SET is_admin = 1 WHERE email = @email');
+            .query('UPDATE users SET is_admin = 1 WHERE email = @email AND is_master = 0');
         res.status(201).json({ success: true, email: emailLower, department });
     } catch (error) {
         if (error.number === 2627) return res.status(409).json({ error: 'Email already in admin list' });
@@ -1488,9 +1615,10 @@ app.post('/api/master-emails', authMiddleware, async (req, res) => {
         const dept = req.body.department && ['QA', 'SE', 'SDET'].includes(req.body.department) ? req.body.department : null;
         await pool.request().input('email', sql.NVarChar(255), emailLower).input('dept', sql.NVarChar(10), dept)
             .query('INSERT INTO master_emails (email, department) VALUES (@email, @dept)');
-        await reloadMasterEmails();
+        await pool.request().input('email', sql.NVarChar(255), emailLower).query('DELETE FROM admin_emails WHERE email = @email');
+        await Promise.all([reloadMasterEmails(), reloadAdminEmails()]);
         await pool.request().input('email', sql.NVarChar(255), emailLower)
-            .query('UPDATE users SET is_master = 1, is_admin = 1 WHERE email = @email');
+            .query('UPDATE users SET is_master = 1, is_admin = 0 WHERE email = @email');
         res.status(201).json({ success: true, email: emailLower });
     } catch (error) {
         if (error.number === 2627) return res.status(409).json({ error: 'Email already in master list' });

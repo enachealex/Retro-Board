@@ -294,6 +294,7 @@ const App = () => {
   const [editUserLead, setEditUserLead] = useState("");
   const [editUserFirstName, setEditUserFirstName] = useState("");
   const [editUserLastName, setEditUserLastName] = useState("");
+  const [editUserAssignLead, setEditUserAssignLead] = useState(false);
 
   const effectiveCompanyFilter = isSuperUser
     ? (masterCompanyFilter || user?.company || DEFAULT_COMPANY)
@@ -427,6 +428,22 @@ const App = () => {
       const res = await axios.get(`${API_URL}/leads`, { params: { company: effectiveCompanyFilter || '' } });
       setLeadsByDept(res.data);
     } catch (e) { console.error("Error fetching leads", e); }
+  };
+
+  const deleteLead = async (department, leadName) => {
+    try {
+      await axios.delete(`${API_URL}/leads`, {
+        ...authHeaders(token),
+        params: { company: effectiveCompanyFilter || '', department, lead: leadName },
+        data: { company: effectiveCompanyFilter || '', department, lead: leadName },
+      });
+      setUsersList(prev => prev.map(u => {
+        if (u.department === department && u.lead === leadName) return { ...u, lead: null };
+        if (u.department === department && (u.display_name || u.username) === leadName) return { ...u, is_admin: false };
+        return u;
+      }));
+      fetchLeads();
+    } catch (e) { console.error("Error deleting lead", e); }
   };
 
   useEffect(() => { if (token) fetchLeads(); }, [token, effectiveCompanyFilter]);
@@ -591,11 +608,14 @@ const App = () => {
     try {
       const firstName = editUserFirstName.trim();
       const lastName = editUserLastName.trim();
-      await axios.patch(`${API_URL}/users/${userId}`, { department: editUserDept, lead: editUserLead, first_name: firstName, last_name: lastName }, authHeaders(token));
+      const assignedLead = editUserAssignLead ? null : editUserLead;
+      await axios.patch(`${API_URL}/users/${userId}`, { department: editUserDept, lead: assignedLead, first_name: firstName, last_name: lastName, is_lead: editUserAssignLead }, authHeaders(token));
       const displayName = [firstName, lastName].filter(Boolean).join(' ');
-      setUsersList(prev => prev.map(u => u.id === userId ? { ...u, department: editUserDept, lead: editUserLead, first_name: firstName, last_name: lastName, display_name: displayName || u.display_name } : u));
+      setUsersList(prev => prev.map(u => u.id === userId ? { ...u, department: editUserDept, lead: assignedLead, is_admin: editUserAssignLead ? true : u.is_admin, first_name: firstName, last_name: lastName, display_name: displayName || u.display_name } : u));
+      if (editUserAssignLead) fetchLeads();
     } catch (e) { console.error("Error updating user", e); }
     setEditingUserId(null);
+    setEditUserAssignLead(false);
   };
 
   const deleteUser = async (userId) => {
@@ -2708,6 +2728,34 @@ const App = () => {
                     );
                   })()}
 
+                  {isSuperUser && Object.values(leadsByDept).some(leads => leads.length > 0) && (
+                    <div className="users-section">
+                      <div className="users-section-header">Leads</div>
+                      {Object.entries(leadsByDept).map(([dept, leads]) => (
+                        leads.length > 0 && (
+                          <div key={dept} className="lead-manage-group">
+                            <div className="lead-manage-dept">{dept}</div>
+                            {leads.map(leadName => (
+                              <div key={`${dept}-${leadName}`} className="lead-manage-row">
+                                <span className="lead-manage-name">{leadName}</span>
+                                <button
+                                  className="lead-remove-btn"
+                                  title="Remove lead"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    showConfirm(`Remove ${leadName} as a ${dept} lead? Assigned users will move to Unassigned.`, () => deleteLead(dept, leadName));
+                                  }}
+                                >
+                                  <X size={12} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )
+                      ))}
+                    </div>
+                  )}
+
                   {/* Users section — grouped by Lead */}
                   {(() => {
                     const members = usersList.filter(u => !u.is_master && !u.is_overlord);
@@ -2758,24 +2806,35 @@ const App = () => {
                               className="user-edit-select"
                               value={editUserLead}
                               onChange={e => setEditUserLead(e.target.value)}
+                              disabled={editUserAssignLead}
                             >
                               <option value="">Select lead…</option>
-                              {usersList
-                                .filter(lu => lu.department === editUserDept)
-                                .map(lu => (
-                                  <option key={lu.id} value={lu.display_name}>{lu.display_name}</option>
+                              {(leadsByDept[editUserDept] || [])
+                                .map(leadName => (
+                                  <option key={leadName} value={leadName}>{leadName}</option>
                                 ))
                               }
                             </select>
+                            <label className="user-edit-lead-toggle">
+                              <input
+                                type="checkbox"
+                                checked={editUserAssignLead}
+                                onChange={e => {
+                                  setEditUserAssignLead(e.target.checked);
+                                  if (e.target.checked) setEditUserLead("");
+                                }}
+                              />
+                              <span>Assign as lead in {editUserDept}</span>
+                            </label>
                             <div className="user-edit-actions">
-                              <button className="user-save-btn" onClick={() => saveUserEdit(u.id)} disabled={!editUserLead}>Save</button>
-                              <button className="user-cancel-btn" onClick={() => setEditingUserId(null)}>Cancel</button>
+                              <button className="user-save-btn" onClick={() => saveUserEdit(u.id)} disabled={!editUserAssignLead && !editUserLead}>Save</button>
+                              <button className="user-cancel-btn" onClick={() => { setEditingUserId(null); setEditUserAssignLead(false); }}>Cancel</button>
                             </div>
                           </div>
                         ) : (
                           <div
                             className="user-row"
-                            onClick={isSuperUser ? () => { if (!u.is_master && !u.is_overlord) { setEditingUserId(u.id); setEditUserDept(u.department || "QA"); setEditUserLead(u.lead || ""); setEditUserFirstName(u.first_name || ""); setEditUserLastName(u.last_name || ""); } } : undefined}
+                            onClick={isSuperUser ? () => { if (!u.is_master && !u.is_overlord) { setEditingUserId(u.id); setEditUserDept(u.department || "QA"); setEditUserLead(u.lead || ""); setEditUserFirstName(u.first_name || ""); setEditUserLastName(u.last_name || ""); setEditUserAssignLead(!!u.is_admin); } } : undefined}
                             onContextMenu={isSuperUser ? (e) => { e.preventDefault(); e.stopPropagation(); setContextMenu({ x: e.clientX, y: e.clientY, type: "user", id: u.id, dept: u.department || "OWS" }); } : undefined}
                           >
                             <div className="user-row-line1">
