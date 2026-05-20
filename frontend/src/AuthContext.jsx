@@ -132,11 +132,13 @@ export function AuthProvider({ children }) {
       if (res.data?.emailVerificationRequired) {
         return res.data;
       }
-      if (!res.data?.token || !res.data?.user) {
-        return res.data || true;
-      }
-      persistAuth(res.data.token, res.data.user);
-      return true;
+      // Defensive fallback: registration should require email confirmation,
+      // even if an older backend returns auth tokens directly.
+      return {
+        success: true,
+        emailVerificationRequired: true,
+        email: res.data?.email || email,
+      };
     } catch (err) {
       const msg = err.response?.data?.error || "Registration failed. Please try again.";
       setAuthError(msg);
@@ -144,7 +146,7 @@ export function AuthProvider({ children }) {
     } finally {
       setAuthLoading(false);
     }
-  }, [persistAuth]);
+  }, []);
 
   const isAuthenticated = !!token && !!user;
 

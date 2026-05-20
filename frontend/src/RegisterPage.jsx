@@ -28,6 +28,8 @@ export default function RegisterPage({ onGoToLogin }) {
   const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
   const [securityStep, setSecurityStep] = useState(false);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
+  const [verificationResendLoading, setVerificationResendLoading] = useState(false);
+  const [verificationResendMessage, setVerificationResendMessage] = useState("");
 
   const error = localError || authError;
   const passwordsMatch = password === confirmPassword;
@@ -136,13 +138,29 @@ export default function RegisterPage({ onGoToLogin }) {
     }
 
     const result = await register(firstName.trim(), lastName.trim(), email.trim(), password, company.trim(), inviteToken, captcha);
-    if (result?.emailVerificationRequired) {
+    if (result && typeof result === "object" && (result.emailVerificationRequired || result.email)) {
       setPendingVerificationEmail(result.email || email.trim());
+      setVerificationResendMessage("");
       setSecurityStep(false);
       setCaptcha({ token: "", answer: "" });
       return;
     }
     if (!result) setCaptchaReloadKey((key) => key + 1);
+  };
+
+  const handleResendVerification = async () => {
+    const targetEmail = pendingVerificationEmail || email.trim();
+    if (!targetEmail) return;
+    setVerificationResendLoading(true);
+    setVerificationResendMessage("");
+    try {
+      await axios.post(`${API_URL}/auth/resend-verification`, { email: targetEmail });
+      setVerificationResendMessage("If this account still needs confirmation, a new link has been sent.");
+    } catch (err) {
+      setVerificationResendMessage(err.response?.data?.error || "Could not resend confirmation email right now.");
+    } finally {
+      setVerificationResendLoading(false);
+    }
   };
 
   const handleSecurityBack = () => {
@@ -169,6 +187,19 @@ export default function RegisterPage({ onGoToLogin }) {
           <output className="auth-info">
             A confirmation link was sent to <strong>{pendingVerificationEmail}</strong>.
           </output>
+
+          {verificationResendMessage ? (
+            <output className="auth-info">{verificationResendMessage}</output>
+          ) : null}
+
+          <button
+            type="button"
+            className="auth-btn-secondary"
+            onClick={handleResendVerification}
+            disabled={verificationResendLoading}
+          >
+            {verificationResendLoading ? "Resending..." : "Resend Confirmation Email"}
+          </button>
 
           <button type="button" className="auth-btn-primary" onClick={onGoToLogin}>
             Back to Sign In
