@@ -1,16 +1,16 @@
 const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
-const http = require('http');
-const https = require('https');
+const http = require('node:http');
+const https = require('node:https');
 const { Server } = require('socket.io');
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const mysql = require('mysql2/promise');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
-const path = require('path');
-const fs = require('fs');
+const path = require('node:path');
+const fs = require('node:fs');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 require('dotenv').config();
@@ -20,10 +20,10 @@ const { DEFAULT_COMPANY, VALID_DEPARTMENTS, LEADS_BY_DEPT, LEAD_DEFAULT_COLUMNS,
 const SSL_KEY_PATH = path.join(__dirname, 'certs', 'server.key');
 const SSL_CERT_PATH = path.join(__dirname, 'certs', 'server.cert');
 const sslAvailable = fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH);
-const SSL_PORT = parseInt(process.env.SSL_PORT || '5443');
+const SSL_PORT = Number.parseInt(process.env.SSL_PORT || '5443', 10);
 
 // --- Email (nodemailer) ---
-const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
+const SMTP_PORT = Number.parseInt(process.env.SMTP_PORT || '587', 10);
 const SMTP_SECURE = process.env.SMTP_SECURE
     ? process.env.SMTP_SECURE === 'true'
     : SMTP_PORT === 465;
@@ -233,7 +233,7 @@ if (process.env.JWT_SECRET.length < 32) {
 }
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRY = '7d';
-const RESET_TOKEN_EXPIRY_MINUTES = parseInt(process.env.RESET_TOKEN_EXPIRY_MINUTES || '30', 10);
+const RESET_TOKEN_EXPIRY_MINUTES = Number.parseInt(process.env.RESET_TOKEN_EXPIRY_MINUTES || '30', 10);
 const EMAIL_VERIFICATION_EXPIRY_HOURS = Number.parseInt(process.env.EMAIL_VERIFICATION_EXPIRY_HOURS || '48', 10);
 
 function createRandomToken(size = 32) {
@@ -275,7 +275,7 @@ function getTimeZoneOffsetMinutes(dateInput, timeZone) {
     }).formatToParts(new Date(dateInput));
 
     const offsetToken = parts.find(p => p.type === 'timeZoneName')?.value || 'GMT+0';
-    const match = offsetToken.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
+    const match = /GMT([+-])(\d{1,2})(?::?(\d{2}))?/i.exec(offsetToken);
     if (!match) return 0;
 
     const sign = match[1] === '-' ? -1 : 1;
@@ -602,7 +602,7 @@ function verifyCaptchaOrThrow(captcha, options = {}) {
 }
 async function authMiddleware(req, res, next) {
     const authHeader = req.headers['authorization'];
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!authHeader?.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
     const payload = verifyJwt(authHeader.slice(7));
@@ -1399,7 +1399,7 @@ const broadcastBoardUpdate = async (boardId) => {
             );
             cards = await withCardReactions(fetchedCards);
         }
-        io.to(`board:${boardId}`).emit('board:update', { boardId: parseInt(boardId), columns, cards });
+        io.to(`board:${boardId}`).emit('board:update', { boardId: Number.parseInt(boardId, 10), columns, cards });
     } catch (error) {
         console.error('Error broadcasting board update:', error);
     }
@@ -1661,7 +1661,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     // Check if the caller is an authenticated master (for role override)
     let callerIsMaster = false;
     const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
+    if (authHeader?.startsWith('Bearer ')) {
         try {
             const payload = jwt.verify(authHeader.slice(7), JWT_SECRET);
             callerIsMaster = !!payload.is_master;
@@ -2273,7 +2273,7 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
     // Master toggle
     if (is_master !== undefined && department === undefined && is_admin === undefined) {
         // Prevent demoting yourself
-        if (parseInt(userId) === req.user.sub) return res.status(400).json({ error: 'You cannot change your own master status' });
+        if (Number.parseInt(userId, 10) === req.user.sub) return res.status(400).json({ error: 'You cannot change your own master status' });
         const val = is_master ? 1 : 0;
         try {
             const [userRows] = await pool.query('SELECT email FROM users WHERE id = ?', [userId]);
@@ -2309,10 +2309,10 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
                     const boardName = `Retro - ${display_name}`;
                     const [existing] = await pool.query('SELECT id FROM boards WHERE name = ?', [boardName]);
                     if (existing.length === 0) {
-                        await createDefaultAdminBoard(first_name, last_name, req.user.company || DEFAULT_COMPANY, userDept || 'QA', parseInt(userId));
+                        await createDefaultAdminBoard(first_name, last_name, req.user.company || DEFAULT_COMPANY, userDept || 'QA', Number.parseInt(userId, 10));
                     } else {
                         // Board exists — just make sure the user is a member
-                        await pool.query('INSERT IGNORE INTO board_members (board_id, user_id) VALUES (?, ?)', [existing[0].id, parseInt(userId)]);
+                        await pool.query('INSERT IGNORE INTO board_members (board_id, user_id) VALUES (?, ?)', [existing[0].id, Number.parseInt(userId, 10)]);
                         broadcastBoardsUpdate();
                     }
                 } else {
@@ -2380,7 +2380,7 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
         }
 
         // Notify the moved user so they see the board immediately
-        const targetSockets = userSockets.get(parseInt(userId));
+        const targetSockets = userSockets.get(Number.parseInt(userId, 10));
         if (targetSockets) {
             for (const sid of targetSockets) {
                 io.to(sid).emit('boards:refresh');
@@ -2397,7 +2397,7 @@ app.delete('/api/users/:userId', authMiddleware, async (req, res) => {
     if (!req.user.is_master) return res.status(403).json({ error: 'Access denied' });
     const { userId } = req.params;
     // Prevent deleting yourself
-    if (parseInt(userId) === req.user.sub) return res.status(400).json({ error: 'You cannot delete your own account' });
+    if (Number.parseInt(userId, 10) === req.user.sub) return res.status(400).json({ error: 'You cannot delete your own account' });
     try {
         await pool.query('DELETE FROM users WHERE id = ?', [userId]);
         res.json({ success: true });
@@ -2526,7 +2526,7 @@ app.get('/api/role-labels', async (req, res) => {
     try {
         const authHeader = req.headers['authorization'];
         let requester = null;
-        if (authHeader && authHeader.startsWith('Bearer ')) {
+        if (authHeader?.startsWith('Bearer ')) {
             const payload = verifyJwt(authHeader.slice(7));
             if (payload) requester = payload;
         }
@@ -2753,7 +2753,7 @@ app.post('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
         res.status(201).json({ success: true, user: userRows[0] });
         broadcastBoardsUpdate();
         // Also emit a targeted refresh to the added user so they see the board immediately
-        const targetSockets = userSockets.get(parseInt(userId));
+        const targetSockets = userSockets.get(Number.parseInt(userId, 10));
         if (targetSockets) {
             for (const sid of targetSockets) {
                 io.to(sid).emit('boards:refresh');
@@ -2775,7 +2775,7 @@ app.delete('/api/boards/:boardId/members/:userId', authMiddleware, async (req, r
         res.json({ success: true });
         broadcastBoardsUpdate();
         // Notify the removed user so their board list updates immediately
-        const targetSockets = userSockets.get(parseInt(userId));
+        const targetSockets = userSockets.get(Number.parseInt(userId, 10));
         if (targetSockets) {
             for (const sid of targetSockets) {
                 io.to(sid).emit('boards:refresh');
@@ -3375,7 +3375,7 @@ setInterval(async () => {
 // Get all GIFs (with optional search)
 app.get('/api/gifs', authMiddleware, async (req, res) => {
     const { search, page = 1, limit = 50, filter } = req.query;
-    const offset = (Math.max(1, parseInt(page)) - 1) * parseInt(limit);
+    const offset = (Math.max(1, Number.parseInt(page, 10)) - 1) * Number.parseInt(limit, 10);
     try {
         let rows, countRows;
         let where = '';
@@ -3395,8 +3395,8 @@ app.get('/api/gifs', authMiddleware, async (req, res) => {
         const countSql = `SELECT COUNT(*) as total FROM gifs WHERE 1=1${where}`;
         const dataSql = `SELECT * FROM gifs WHERE 1=1${where} ORDER BY is_default DESC, created_at DESC LIMIT ? OFFSET ?`;
         [countRows] = await pool.query(countSql, params);
-        [rows] = await pool.query(dataSql, [...params, parseInt(limit), offset]);
-        res.json({ gifs: rows, total: countRows[0].total, page: parseInt(page), limit: parseInt(limit) });
+        [rows] = await pool.query(dataSql, [...params, Number.parseInt(limit, 10), offset]);
+        res.json({ gifs: rows, total: countRows[0].total, page: Number.parseInt(page, 10), limit: Number.parseInt(limit, 10) });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

@@ -1,29 +1,29 @@
 const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
-const http = require('http');
-const https = require('https');
+const http = require('node:http');
+const https = require('node:https');
 const { Server } = require('socket.io');
-const crypto = require('crypto');
+const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const sql = process.env.DB_DRIVER === 'msnodesqlv8' ? require('mssql/msnodesqlv8') : require('mssql');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
 const rateLimit = require('express-rate-limit');
-const path = require('path');
-const fs = require('fs');
+const path = require('node:path');
+const fs = require('node:fs');
 require('dotenv').config();
 
 // --- SSL Configuration ---
 const SSL_KEY_PATH = path.join(__dirname, 'certs', 'server.key');
 const SSL_CERT_PATH = path.join(__dirname, 'certs', 'server.cert');
 const sslAvailable = fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH);
-const SSL_PORT = parseInt(process.env.SSL_PORT || '5443');
+const SSL_PORT = Number.parseInt(process.env.SSL_PORT || '5443', 10);
 
 // --- Email (nodemailer) ---
 const emailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp-mail.outlook.com',
-    port: parseInt(process.env.SMTP_PORT || '587'),
+    port: Number.parseInt(process.env.SMTP_PORT || '587', 10),
     secure: false,
     auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
     tls: process.env.SMTP_INSECURE_TLS === 'true' ? { rejectUnauthorized: false } : undefined
@@ -531,7 +531,7 @@ function verifyCaptchaOrThrow(captcha, options = {}) {
 }
 async function authMiddleware(req, res, next) {
     const authHeader = req.headers['authorization'];
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!authHeader?.startsWith('Bearer ')) {
         return res.status(401).json({ error: 'Unauthorized' });
     }
     const payload = verifyJwt(authHeader.slice(7));
@@ -1200,7 +1200,7 @@ const broadcastBoardUpdate = async (boardId) => {
                 cards = cards.map(c => ({ ...c, reactions: reactionsMap[c.id] || [] }));
             }
         }
-        io.to(`board:${boardId}`).emit('board:update', { boardId: parseInt(boardId), columns, cards });
+        io.to(`board:${boardId}`).emit('board:update', { boardId: Number.parseInt(boardId, 10), columns, cards });
     } catch (error) {
         console.error('Error broadcasting board update:', error);
     }
@@ -1399,7 +1399,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     let callerIsMaster = false;
     let callerIsOverlord = false;
     const authHeader = req.headers.authorization;
-    if (authHeader && authHeader.startsWith('Bearer ')) {
+    if (authHeader?.startsWith('Bearer ')) {
         try {
             const payload = jwt.verify(authHeader.slice(7), JWT_SECRET);
             callerIsMaster = !!payload.is_master;
@@ -1969,7 +1969,7 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
 
     // Master toggle
     if (is_master !== undefined && department === undefined && is_admin === undefined) {
-        if (parseInt(userId) === req.user.sub) return res.status(400).json({ error: 'You cannot change your own master status' });
+        if (Number.parseInt(userId, 10) === req.user.sub) return res.status(400).json({ error: 'You cannot change your own master status' });
         const val = is_master ? 1 : 0;
         try {
             const userResult = await pool.request()
@@ -2020,11 +2020,11 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
                         .input('name', sql.NVarChar(255), boardName)
                         .query('SELECT id FROM boards WHERE name = @name');
                     if (existBoard.recordset.length === 0) {
-                        await createDefaultAdminBoard(fn, ln, userDept || 'QA', parseInt(userId));
+                        await createDefaultAdminBoard(fn, ln, userDept || 'QA', Number.parseInt(userId, 10));
                     } else {
                         await pool.request()
                             .input('boardId', sql.Int, existBoard.recordset[0].id)
-                            .input('userId', sql.Int, parseInt(userId))
+                            .input('userId', sql.Int, Number.parseInt(userId, 10))
                             .query(`IF NOT EXISTS (SELECT 1 FROM board_members WHERE board_id = @boardId AND user_id = @userId)
                                     INSERT INTO board_members (board_id, user_id) VALUES (@boardId, @userId)`);
                         broadcastBoardsUpdate();
@@ -2106,7 +2106,7 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
             }
         }
 
-        const targetSockets = userSockets.get(parseInt(userId));
+        const targetSockets = userSockets.get(Number.parseInt(userId, 10));
         if (targetSockets) { for (const sid of targetSockets) io.to(sid).emit('boards:refresh'); }
         broadcastBoardsUpdate();
         res.json({ success: true });
@@ -2116,7 +2116,7 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
 app.delete('/api/users/:userId', authMiddleware, async (req, res) => {
     if (!req.user.is_overlord && !req.user.is_master) return res.status(403).json({ error: 'Access denied' });
     const { userId } = req.params;
-    if (parseInt(userId) === req.user.sub) return res.status(400).json({ error: 'You cannot delete your own account' });
+    if (Number.parseInt(userId, 10) === req.user.sub) return res.status(400).json({ error: 'You cannot delete your own account' });
     try {
         await pool.request().input('id', sql.Int, userId).query('DELETE FROM users WHERE id = @id');
         res.json({ success: true });
@@ -2434,7 +2434,7 @@ app.post('/api/boards/:boardId/members', authMiddleware, async (req, res) => {
                     INSERT INTO board_members (board_id, user_id, added_by) VALUES (@boardId, @userId, @addedBy)`);
         res.status(201).json({ success: true, user: userResult.recordset[0] });
         broadcastBoardsUpdate();
-        const targetSockets = userSockets.get(parseInt(userId));
+        const targetSockets = userSockets.get(Number.parseInt(userId, 10));
         if (targetSockets) { for (const sid of targetSockets) io.to(sid).emit('boards:refresh'); }
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -2448,7 +2448,7 @@ app.delete('/api/boards/:boardId/members/:userId', authMiddleware, async (req, r
             .query('DELETE FROM board_members WHERE board_id = @boardId AND user_id = @userId');
         res.json({ success: true });
         broadcastBoardsUpdate();
-        const targetSockets = userSockets.get(parseInt(userId));
+        const targetSockets = userSockets.get(Number.parseInt(userId, 10));
         if (targetSockets) { for (const sid of targetSockets) io.to(sid).emit('boards:refresh'); }
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -2718,7 +2718,7 @@ setInterval(async () => {
 
 app.post('/api/cards/:id/reactions', authMiddleware, async (req, res) => {
     const { emoji } = req.body;
-    const cardId = parseInt(req.params.id);
+    const cardId = Number.parseInt(req.params.id, 10);
     if (!emoji || typeof emoji !== 'string' || emoji.trim().length === 0 || emoji.trim().length > 20)
         return res.status(400).json({ error: 'Valid emoji is required' });
     try {
@@ -2760,13 +2760,11 @@ app.post('/api/cards/:id/reactions', authMiddleware, async (req, res) => {
 
 app.get('/api/gifs', authMiddleware, async (req, res) => {
     const { search, page = 1, limit = 50, filter } = req.query;
-    const offset = (Math.max(1, parseInt(page)) - 1) * parseInt(limit);
-    const limitNum = parseInt(limit);
+    const offset = (Math.max(1, Number.parseInt(page, 10)) - 1) * Number.parseInt(limit, 10);
+    const limitNum = Number.parseInt(limit, 10);
     try {
         let where = '';
         const request = pool.request();
-        let pIdx = 0;
-
         if (filter === 'custom') {
             where += ' AND is_default = 0';
         } else if (filter === 'mine') {
@@ -2793,7 +2791,7 @@ app.get('/api/gifs', authMiddleware, async (req, res) => {
             `SELECT * FROM gifs WHERE 1=1${where} ORDER BY is_default DESC, created_at DESC OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`
         );
 
-        res.json({ gifs: dataResult.recordset, total: countResult.recordset[0].total, page: parseInt(page), limit: limitNum });
+        res.json({ gifs: dataResult.recordset, total: countResult.recordset[0].total, page: Number.parseInt(page, 10), limit: limitNum });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
