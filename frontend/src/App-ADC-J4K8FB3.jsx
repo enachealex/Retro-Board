@@ -1040,11 +1040,7 @@ const App = () => {
           { id: `temp-col-3`, board_id: tempBoardId, name: "Went Well", position: 2 },
           { id: `temp-col-4`, board_id: tempBoardId, name: "Action Items", position: 3 },
         ]
-      : [
-          { id: `temp-col-1`, board_id: tempBoardId, name: "Went Well", position: 0 },
-          { id: `temp-col-2`, board_id: tempBoardId, name: "To Improve", position: 1 },
-          { id: `temp-col-3`, board_id: tempBoardId, name: "Action Items", position: 2 },
-        ];
+      : [];
     setBoards([newBoard, ...boards]);
     setActiveBoard(newBoard);
     setColumns(defaultColumns);
@@ -2240,7 +2236,7 @@ const App = () => {
                               placeholder="Board name..."
                             />
                             <div className="inline-board-btns">
-                              <button onClick={() => createBoard('blank')} disabled={!newBoardName.trim()} className="inline-create-btn" title="Blank board (3 columns)">
+                              <button onClick={() => createBoard('blank')} disabled={!newBoardName.trim()} className="inline-create-btn" title="Blank board (0 columns)">
                                 Blank
                               </button>
                               <button onClick={() => createBoard('template')} disabled={!newBoardName.trim()} className="inline-create-btn inline-template-btn" title="Template board (5 columns)">

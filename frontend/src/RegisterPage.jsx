@@ -7,6 +7,7 @@ import axios from "axios";
 import "./Auth.css";
 
 const API_URL = getApiUrl();
+const EMAIL_VERIFICATION_FALLBACK_KEY = import.meta.env.VITE_EMAIL_VERIFICATION_FALLBACK_KEY || "";
 
 export default function RegisterPage({ onGoToLogin }) {
   const { register, authError, authLoading, setAuthError } = useAuth();
@@ -28,6 +29,8 @@ export default function RegisterPage({ onGoToLogin }) {
   const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
   const [securityStep, setSecurityStep] = useState(false);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
+  const [manualVerificationUrl, setManualVerificationUrl] = useState("");
+  const [manualVerificationToken, setManualVerificationToken] = useState("");
   const [verificationResendLoading, setVerificationResendLoading] = useState(false);
   const [verificationResendMessage, setVerificationResendMessage] = useState("");
 
@@ -140,6 +143,8 @@ export default function RegisterPage({ onGoToLogin }) {
     const result = await register(firstName.trim(), lastName.trim(), email.trim(), password, company.trim(), inviteToken, captcha);
     if (result && typeof result === "object" && (result.emailVerificationRequired || result.email)) {
       setPendingVerificationEmail(result.email || email.trim());
+      setManualVerificationUrl(result.delivery === "manual" ? (result.verificationUrl || "") : "");
+      setManualVerificationToken(result.delivery === "manual" ? (result.verificationToken || "") : "");
       setVerificationResendMessage("");
       setSecurityStep(false);
       setCaptcha({ token: "", answer: "" });
@@ -154,8 +159,23 @@ export default function RegisterPage({ onGoToLogin }) {
     setVerificationResendLoading(true);
     setVerificationResendMessage("");
     try {
-      await axios.post(`${API_URL}/auth/resend-verification`, { email: targetEmail });
-      setVerificationResendMessage("If this account still needs confirmation, a new link has been sent.");
+      const headers = EMAIL_VERIFICATION_FALLBACK_KEY
+        ? { "x-verify-fallback-key": EMAIL_VERIFICATION_FALLBACK_KEY }
+        : undefined;
+      const res = await axios.post(
+        `${API_URL}/auth/resend-verification`,
+        { email: targetEmail },
+        headers ? { headers } : undefined,
+      );
+      if (res.data?.delivery === "manual") {
+        setManualVerificationUrl(res.data?.verificationUrl || "");
+        setManualVerificationToken(res.data?.verificationToken || "");
+        setVerificationResendMessage("Email delivery is unavailable right now. Use the manual verification link below.");
+      } else {
+        setManualVerificationUrl("");
+        setManualVerificationToken("");
+        setVerificationResendMessage("If this account still needs confirmation, a new link has been sent.");
+      }
     } catch (err) {
       setVerificationResendMessage(err.response?.data?.error || "Could not resend confirmation email right now.");
     } finally {
@@ -192,13 +212,23 @@ export default function RegisterPage({ onGoToLogin }) {
             <output className="auth-info">{verificationResendMessage}</output>
           ) : null}
 
+          {manualVerificationUrl ? (
+            <output className="auth-info">
+              Manual verification link: <a href={manualVerificationUrl} style={{ wordBreak: "break-all" }}>{manualVerificationUrl}</a>
+            </output>
+          ) : null}
+
+          {manualVerificationToken ? (
+            <output className="auth-info">Manual verification token: <strong>{manualVerificationToken}</strong></output>
+          ) : null}
+
           <button
             type="button"
             className="auth-btn-secondary"
             onClick={handleResendVerification}
             disabled={verificationResendLoading}
           >
-            {verificationResendLoading ? "Resending..." : "Resend Confirmation Email"}
+            {verificationResendLoading ? "Resending..." : "Resend Email"}
           </button>
 
           <button type="button" className="auth-btn-primary" onClick={onGoToLogin}>

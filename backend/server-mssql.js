@@ -229,6 +229,15 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRY = '7d';
 const RESET_TOKEN_EXPIRY_MINUTES = Number.parseInt(process.env.RESET_TOKEN_EXPIRY_MINUTES || '30', 10);
 const EMAIL_VERIFICATION_EXPIRY_HOURS = Number.parseInt(process.env.EMAIL_VERIFICATION_EXPIRY_HOURS || '48', 10);
+const EMAIL_VERIFICATION_FALLBACK_KEY = String(process.env.EMAIL_VERIFICATION_FALLBACK_KEY || '');
+
+function isValidEmailVerificationFallbackKey(candidate) {
+    if (!EMAIL_VERIFICATION_FALLBACK_KEY || !candidate) return false;
+    const expected = Buffer.from(EMAIL_VERIFICATION_FALLBACK_KEY, 'utf8');
+    const provided = Buffer.from(String(candidate), 'utf8');
+    if (expected.length !== provided.length) return false;
+    return crypto.timingSafeEqual(expected, provided);
+}
 
 function createRandomToken(size = 32) {
     return crypto.randomBytes(size).toString('hex');
@@ -599,7 +608,7 @@ const getAppBaseUrl = () => {
     return firstOrigin.replace(/\/$/, '');
 };
 
-async function issueEmailVerification(user) {
+async function createEmailVerificationToken(user) {
     const token = createRandomToken(24);
     const tokenHash = hashToken(token);
     await pool.request()
@@ -611,6 +620,11 @@ async function issueEmailVerification(user) {
         .input('expires', sql.Int, EMAIL_VERIFICATION_EXPIRY_HOURS)
         .query('INSERT INTO email_verification_tokens (user_id, token_hash, expires_at) VALUES (@userId, @tokenHash, DATEADD(HOUR, @expires, GETDATE()))');
     const verificationUrl = `${getAppBaseUrl()}/?verify=${encodeURIComponent(token)}`;
+    return { token, verificationUrl };
+}
+
+async function issueEmailVerification(user) {
+    const { token, verificationUrl } = await createEmailVerificationToken(user);
     await sendEmailVerificationEmail(user.first_name || user.display_name || 'there', user.email, verificationUrl, EMAIL_VERIFICATION_EXPIRY_HOURS);
     return { token, verificationUrl };
 }
@@ -747,14 +761,6 @@ const initDb = async () => {
                 created_at DATETIME2 DEFAULT GETDATE(),
                 CONSTRAINT FK_password_reset_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
-        `);
-
-        await pool.request().query(`
-            IF NOT EXISTS (SELECT 1 FROM role_seed_state WHERE role_key = 'email_verification_backfill')
-            BEGIN
-                UPDATE users SET email_verified_at = COALESCE(email_verified_at, created_at, GETDATE()) WHERE password_hash IS NOT NULL;
-                INSERT INTO role_seed_state (role_key) VALUES ('email_verification_backfill');
-            END
         `);
 
         // Seed default role allowlists only on first setup so later deletions are respected.
@@ -1178,6 +1184,7 @@ app.post('/api/auth/register', async (req, res) => {
     const emailLower = (email || '').toLowerCase();
     const isMasterEmail = MASTER_EMAILS.includes(emailLower);
     const isOverlordEmail = OVERLORD_EMAILS.includes(emailLower);
+    const verificationFallbackKey = String(req.get('x-verify-fallback-key') || '');
 
     let callerIsMaster = false;
     let callerIsOverlord = false;
@@ -1253,13 +1260,39 @@ app.post('/api/auth/register', async (req, res) => {
             if (user.is_admin || user.is_master) {
                 await createDefaultAdminBoard(first_name, last_name, user.department, user.id);
             }
-            await issueEmailVerification(user);
-            return res.status(200).json(emailVerificationResponse(user));
+            try {
+                await issueEmailVerification(user);
+                return res.status(200).json(emailVerificationResponse(user));
+            } catch {
+                if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
+                    const { token, verificationUrl } = await createEmailVerificationToken(user);
+                    return res.status(200).json({
+                        ...emailVerificationResponse(user),
+                        delivery: 'manual',
+                        verificationToken: token,
+                        verificationUrl,
+                    });
+                }
+                return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+            }
         }
 
         if (existResult.recordset.length > 0 && !isMasterAdd && !existResult.recordset[0].email_verified_at) {
-            await issueEmailVerification(existResult.recordset[0]);
-            return res.status(200).json(emailVerificationResponse(existResult.recordset[0]));
+            try {
+                await issueEmailVerification(existResult.recordset[0]);
+                return res.status(200).json(emailVerificationResponse(existResult.recordset[0]));
+            } catch {
+                if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
+                    const { token, verificationUrl } = await createEmailVerificationToken(existResult.recordset[0]);
+                    return res.status(200).json({
+                        ...emailVerificationResponse(existResult.recordset[0]),
+                        delivery: 'manual',
+                        verificationToken: token,
+                        verificationUrl,
+                    });
+                }
+                return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+            }
         }
 
         if (existResult.recordset.length > 0)
@@ -1306,9 +1339,9 @@ app.post('/api/auth/register', async (req, res) => {
             .input('isMaster', sql.Bit, is_master)
             .input('isOverlord', sql.Bit, is_overlord)
             .input('ph', sql.NVarChar(255), password_hash)
-            .query(`INSERT INTO users (username, first_name, last_name, display_name, email, department, [lead], is_admin, is_master, is_overlord, password_hash)
+            .query(`INSERT INTO users (username, first_name, last_name, display_name, email, department, [lead], is_admin, is_master, is_overlord, password_hash, email_verified_at)
                     OUTPUT INSERTED.id
-                    VALUES (@username, @fn, @ln, @dn, @email, @dept, @lead, @isAdmin, @isMaster, @isOverlord, @ph)`);
+                VALUES (@username, @fn, @ln, @dn, @email, @dept, @lead, @isAdmin, @isMaster, @isOverlord, @ph, NULL)`);
         const newId = insertResult.recordset[0].id;
         const newUser = { id: newId, username, first_name, last_name, display_name, email: emailLower, department: finalDept, lead: finalLead, is_admin, is_master, is_overlord, email_verified_at: null };
 
@@ -1355,8 +1388,21 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(201).json({ success: true, user: buildUserPublic(newUser) });
         }
 
-        await issueEmailVerification(newUser);
-        res.status(201).json(emailVerificationResponse(newUser));
+        try {
+            await issueEmailVerification(newUser);
+            res.status(201).json(emailVerificationResponse(newUser));
+        } catch {
+            if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
+                const { token, verificationUrl } = await createEmailVerificationToken(newUser);
+                return res.status(201).json({
+                    ...emailVerificationResponse(newUser),
+                    delivery: 'manual',
+                    verificationToken: token,
+                    verificationUrl,
+                });
+            }
+            return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+        }
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
         console.error('Register error:', error);
@@ -1448,6 +1494,7 @@ app.post('/api/auth/verify-email', async (req, res) => {
 
 app.post('/api/auth/resend-verification', async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
+    const verificationFallbackKey = String(req.get('x-verify-fallback-key') || '');
     if (!email) return res.status(400).json({ error: 'email is required' });
 
     try {
@@ -1458,8 +1505,16 @@ app.post('/api/auth/resend-verification', async (req, res) => {
             return res.json({ success: true });
         }
 
-        await issueEmailVerification(result.recordset[0]);
-        res.json({ success: true });
+        try {
+            await issueEmailVerification(result.recordset[0]);
+            res.json({ success: true });
+        } catch {
+            if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
+                const { token, verificationUrl } = await createEmailVerificationToken(result.recordset[0]);
+                return res.json({ success: true, delivery: 'manual', verificationToken: token, verificationUrl });
+            }
+            return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+        }
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
@@ -1516,7 +1571,7 @@ app.post('/api/auth/reset-password', async (req, res) => {
         await pool.request()
             .input('passwordHash', sql.NVarChar(255), password_hash)
             .input('userId', sql.Int, result.recordset[0].user_id)
-            .query('UPDATE users SET password_hash = @passwordHash, email_verified_at = COALESCE(email_verified_at, GETDATE()) WHERE id = @userId');
+            .query('UPDATE users SET password_hash = @passwordHash WHERE id = @userId');
         await pool.request()
             .input('id', sql.Int, result.recordset[0].id)
             .query('UPDATE password_reset_tokens SET used_at = GETDATE() WHERE id = @id');

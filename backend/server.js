@@ -51,10 +51,19 @@ function escapeHtml(value) {
 }
 
 const PASSWORD_RESET_FALLBACK_KEY = String(process.env.PASSWORD_RESET_FALLBACK_KEY || '');
+const EMAIL_VERIFICATION_FALLBACK_KEY = String(process.env.EMAIL_VERIFICATION_FALLBACK_KEY || '');
 
 function isValidFallbackKey(candidate) {
     if (!PASSWORD_RESET_FALLBACK_KEY || !candidate) return false;
     const expected = Buffer.from(PASSWORD_RESET_FALLBACK_KEY, 'utf8');
+    const provided = Buffer.from(String(candidate), 'utf8');
+    if (expected.length !== provided.length) return false;
+    return crypto.timingSafeEqual(expected, provided);
+}
+
+function isValidEmailVerificationFallbackKey(candidate) {
+    if (!EMAIL_VERIFICATION_FALLBACK_KEY || !candidate) return false;
+    const expected = Buffer.from(EMAIL_VERIFICATION_FALLBACK_KEY, 'utf8');
     const provided = Buffer.from(String(candidate), 'utf8');
     if (expected.length !== provided.length) return false;
     return crypto.timingSafeEqual(expected, provided);
@@ -832,13 +841,6 @@ const initDb = async () => {
                 seeded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        const [emailBackfillRows] = await pool.query('SELECT role_key FROM role_seed_state WHERE role_key = ?', ['email_verification_backfill']);
-        if (emailBackfillRows.length === 0) {
-            try {
-                await pool.query(`UPDATE users SET email_verified_at = COALESCE(email_verified_at, created_at, NOW()) WHERE password_hash IS NOT NULL`);
-                await pool.query('INSERT IGNORE INTO role_seed_state (role_key) VALUES (?)', ['email_verification_backfill']);
-            } catch (e) { /* ignore */ }
-        }
 
         // Expand department ENUM to include QA and SE
         try { await pool.query(`ALTER TABLE users MODIFY COLUMN department ENUM('OWS','Apex','QA','SE','SDET') NOT NULL DEFAULT 'QA'`); } catch (e) { /* ignore */ }
@@ -1293,7 +1295,7 @@ const getRequestBaseUrl = (req) => {
     return `${protocol}://${host}`.replace(/\/$/, '');
 };
 
-async function issueEmailVerification(user) {
+async function createEmailVerificationToken(user) {
     const token = createRandomToken(24);
     const tokenHash = hashToken(token);
     await pool.query('UPDATE email_verification_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL', [user.id]);
@@ -1302,6 +1304,11 @@ async function issueEmailVerification(user) {
         [user.id, tokenHash, EMAIL_VERIFICATION_EXPIRY_HOURS]
     );
     const verificationUrl = `${getAppBaseUrl()}/?verify=${encodeURIComponent(token)}`;
+    return { token, verificationUrl };
+}
+
+async function issueEmailVerification(user) {
+    const { token, verificationUrl } = await createEmailVerificationToken(user);
     await sendEmailVerificationEmail(user.first_name || user.display_name || 'there', user.email, verificationUrl, EMAIL_VERIFICATION_EXPIRY_HOURS);
     return { token, verificationUrl };
 }
@@ -1469,6 +1476,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     const { firstName, lastName, email, password, company, department, lead, role, inviteToken, captcha } = req.body;
     const emailLower = (email || '').toLowerCase();
     const isMasterEmail = MASTER_EMAILS.includes(emailLower);
+    const verificationFallbackKey = String(req.get('x-verify-fallback-key') || '');
 
     // Check if the caller is an authenticated master (for role override)
     let callerIsMaster = false;
@@ -1574,13 +1582,39 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
                 await pool.query('UPDATE board_invites SET status = \'ACCEPTED\', accepted_by_user_id = ?, decided_at = NOW() WHERE id = ?', [user.id, inviteRecord.id]);
             }
 
-            await issueEmailVerification(user);
-            return res.status(200).json(emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null }));
+            try {
+                await issueEmailVerification(user);
+                return res.status(200).json(emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null }));
+            } catch {
+                if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
+                    const { token, verificationUrl } = await createEmailVerificationToken(user);
+                    return res.status(200).json({
+                        ...emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null }),
+                        delivery: 'manual',
+                        verificationToken: token,
+                        verificationUrl,
+                    });
+                }
+                return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+            }
         }
 
         if (existingEmail.length > 0 && !isMasterAdd && !existingEmail[0].email_verified_at) {
-            await issueEmailVerification(existingEmail[0]);
-            return res.status(200).json(emailVerificationResponse(existingEmail[0]));
+            try {
+                await issueEmailVerification(existingEmail[0]);
+                return res.status(200).json(emailVerificationResponse(existingEmail[0]));
+            } catch {
+                if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
+                    const { token, verificationUrl } = await createEmailVerificationToken(existingEmail[0]);
+                    return res.status(200).json({
+                        ...emailVerificationResponse(existingEmail[0]),
+                        delivery: 'manual',
+                        verificationToken: token,
+                        verificationUrl,
+                    });
+                }
+                return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+            }
         }
 
         if (existingEmail.length > 0) {
@@ -1615,8 +1649,8 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
         while (true) {
             try {
                 [result] = await pool.query(
-                    'INSERT INTO users (username, first_name, last_name, display_name, email, company, department, `lead`, is_admin, is_master, password_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    [username, first_name, last_name, display_name, emailLower, finalCompany, finalDept, finalLead, is_admin, is_master, password_hash]
+                    'INSERT INTO users (username, first_name, last_name, display_name, email, company, department, `lead`, is_admin, is_master, password_hash, email_verified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [username, first_name, last_name, display_name, emailLower, finalCompany, finalDept, finalLead, is_admin, is_master, password_hash, null]
                 );
                 break; // INSERT succeeded
             } catch (insertErr) {
@@ -1676,8 +1710,21 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
             return res.status(201).json({ success: true, user: buildUserPublic(newUser) });
         }
 
-        await issueEmailVerification(newUser);
-        res.status(201).json(emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null }));
+        try {
+            await issueEmailVerification(newUser);
+            res.status(201).json(emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null }));
+        } catch {
+            if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
+                const { token, verificationUrl } = await createEmailVerificationToken(newUser);
+                return res.status(201).json({
+                    ...emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null }),
+                    delivery: 'manual',
+                    verificationToken: token,
+                    verificationUrl,
+                });
+            }
+            return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+        }
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
         console.error('Register error:', error);
@@ -1764,6 +1811,7 @@ app.post('/api/auth/verify-email', authLimiter, async (req, res) => {
 
 app.post('/api/auth/resend-verification', authLimiter, async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
+    const verificationFallbackKey = String(req.get('x-verify-fallback-key') || '');
     if (!email) return res.status(400).json({ error: 'email is required' });
 
     try {
@@ -1772,8 +1820,16 @@ app.post('/api/auth/resend-verification', authLimiter, async (req, res) => {
             return res.json({ success: true });
         }
 
-        await issueEmailVerification(rows[0]);
-        res.json({ success: true });
+        try {
+            await issueEmailVerification(rows[0]);
+            res.json({ success: true });
+        } catch {
+            if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
+                const { token, verificationUrl } = await createEmailVerificationToken(rows[0]);
+                return res.json({ success: true, delivery: 'manual', verificationToken: token, verificationUrl });
+            }
+            return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+        }
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
@@ -1853,7 +1909,7 @@ app.post('/api/auth/reset-password', passwordLimiter, async (req, res) => {
         if (rows.length === 0) return res.status(400).json({ error: 'Invalid or expired reset link' });
 
         const password_hash = await hashPassword(newPassword);
-        await pool.query('UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = ?', [password_hash, rows[0].user_id]);
+        await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [password_hash, rows[0].user_id]);
         await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?', [rows[0].id]);
         res.json({ success: true });
     } catch (error) {

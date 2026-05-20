@@ -4,6 +4,7 @@ import { getAuthUrl } from "./config";
 
 const TOKEN_KEY = "retro_board_token";
 const USER_KEY = "retro_board_user";
+const EMAIL_VERIFICATION_FALLBACK_KEY = import.meta.env.VITE_EMAIL_VERIFICATION_FALLBACK_KEY || "";
 
 const AuthContext = createContext(null);
 
@@ -125,7 +126,10 @@ export function AuthProvider({ children }) {
     setAuthError(null);
     const AUTH_URL = getAuthUrl();
     try {
-      const res = await axios.post(`${AUTH_URL}/register`, { firstName, lastName, email, password, company, inviteToken, captcha });
+      const headers = EMAIL_VERIFICATION_FALLBACK_KEY
+        ? { "x-verify-fallback-key": EMAIL_VERIFICATION_FALLBACK_KEY }
+        : undefined;
+      const res = await axios.post(`${AUTH_URL}/register`, { firstName, lastName, email, password, company, inviteToken, captcha }, headers ? { headers } : undefined);
       if (res.data?.redirectBoardId) {
         localStorage.setItem("retro_redirect_board_id", String(res.data.redirectBoardId));
       }
