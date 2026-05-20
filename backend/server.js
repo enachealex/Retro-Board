@@ -385,6 +385,7 @@ async function getCurrentUserForAuth(userId) {
     let shouldBeAdmin = 0;
     if (!shouldBeMaster && (currentAdmin || Number(user.listed_admin || 0) === 1)) shouldBeAdmin = 1;
     if (currentMaster !== shouldBeMaster || currentAdmin !== shouldBeAdmin) {
+        console.log(`[auth-reconcile] userId=${user.id} email=${user.email} master ${currentMaster}->${shouldBeMaster} admin ${currentAdmin}->${shouldBeAdmin} listed_master=${user.listed_master} listed_admin=${user.listed_admin}`);
         await pool.query('UPDATE users SET is_admin = ?, is_master = ? WHERE id = ?', [shouldBeAdmin, shouldBeMaster, user.id]);
         user.is_admin = shouldBeAdmin;
         user.is_master = shouldBeMaster;
@@ -1938,6 +1939,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         const shouldBeMaster = (currentMaster || MASTER_EMAILS.includes(emailLower)) ? 1 : 0;
         let shouldBeAdmin = 0;
         if (!shouldBeMaster && (currentAdmin || ADMIN_EMAILS.includes(emailLower))) shouldBeAdmin = 1;
+        console.log(`[login-reconcile] email=${emailLower} currentMaster=${currentMaster} currentAdmin=${currentAdmin} inMasterList=${MASTER_EMAILS.includes(emailLower)} inAdminList=${ADMIN_EMAILS.includes(emailLower)} -> shouldBeMaster=${shouldBeMaster} shouldBeAdmin=${shouldBeAdmin}`);
         if (currentAdmin !== shouldBeAdmin || currentMaster !== shouldBeMaster) {
             await pool.query('UPDATE users SET is_admin = ?, is_master = ? WHERE id = ?', [shouldBeAdmin, shouldBeMaster, user.id]);
             user.is_admin = shouldBeAdmin;
@@ -2307,19 +2309,38 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
         try {
             const [userRows] = await pool.query('SELECT email FROM users WHERE id = ?', [userId]);
             if (userRows.length === 0) return res.status(404).json({ error: 'User not found' });
-            const userEmail = userRows[0].email;
+            const userEmail = (userRows[0].email || '').trim().toLowerCase();
+            console.log(`[master-toggle] start userId=${userId} email=${userEmail} val=${val} caller=${req.user.email}`);
             // Promoting to master also clears is_admin; demoting leaves is_admin as-is
             if (val === 1) {
                 await pool.query('UPDATE users SET is_master = 1, is_admin = 0 WHERE id = ?', [userId]);
                 await pool.query('INSERT IGNORE INTO master_emails (email) VALUES (?)', [userEmail]);
-                await pool.query('DELETE FROM admin_emails WHERE email = ?', [userEmail]);
+                await pool.query('DELETE FROM admin_emails WHERE LOWER(email) = ?', [userEmail]);
             } else {
                 await pool.query('UPDATE users SET is_master = 0 WHERE id = ?', [userId]);
-                await pool.query('DELETE FROM master_emails WHERE email = ?', [userEmail]);
+                await pool.query('DELETE FROM master_emails WHERE LOWER(email) = ?', [userEmail]);
             }
             await Promise.all([reloadMasterEmails(), reloadAdminEmails()]);
-            res.json({ success: true });
-        } catch (error) { res.status(500).json({ error: error.message }); }
+
+            const [verifyRows] = await pool.query(
+                `SELECT u.is_master AS user_master,
+                        (SELECT COUNT(*) FROM master_emails WHERE LOWER(email) = ?) AS in_master_table,
+                        (SELECT COUNT(*) FROM admin_emails  WHERE LOWER(email) = ?) AS in_admin_table
+                 FROM users u WHERE u.id = ?`,
+                [userEmail, userEmail, userId]
+            );
+            const v = verifyRows[0] || {};
+            const inMemory = MASTER_EMAILS.includes(userEmail) ? 1 : 0;
+            console.log(`[master-toggle] verify userId=${userId} email=${userEmail} target=${val} users.is_master=${v.user_master} master_emails=${v.in_master_table} admin_emails=${v.in_admin_table} inMemory=${inMemory}`);
+            if (val === 1 && (!(v.user_master === 1 || v.user_master === true) || Number(v.in_master_table) === 0 || inMemory === 0)) {
+                console.error('[master-toggle] PROMOTION VERIFICATION FAILED', { userId, email: userEmail, verify: v, inMemory });
+                return res.status(500).json({ error: 'Master promotion did not persist. Check server logs.' });
+            }
+            res.json({ success: true, is_master: val === 1, email: userEmail });
+        } catch (error) {
+            console.error('[master-toggle] error', error);
+            res.status(500).json({ error: error.message });
+        }
         return;
     }
     // Admin toggle only

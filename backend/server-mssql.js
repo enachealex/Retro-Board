@@ -315,6 +315,7 @@ async function getCurrentUserForAuth(userId) {
     let shouldBeAdmin = 0;
     if (!shouldBeMaster && !shouldBeOverlord && (currentAdmin || Number(user.listed_admin || 0) === 1)) shouldBeAdmin = 1;
     if (currentMaster !== shouldBeMaster || currentAdmin !== shouldBeAdmin || currentOverlord !== shouldBeOverlord) {
+        console.log(`[auth-reconcile] userId=${user.id} email=${user.email} master ${currentMaster}->${shouldBeMaster} admin ${currentAdmin}->${shouldBeAdmin} listed_master=${user.listed_master} listed_admin=${user.listed_admin}`);
         await pool.request()
             .input('isAdmin', sql.Bit, shouldBeAdmin)
             .input('isMaster', sql.Bit, shouldBeMaster)
@@ -1657,6 +1658,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         const shouldBeOverlord = (currentOverlord || OVERLORD_EMAILS.includes(emailLower)) ? 1 : 0;
         let shouldBeAdmin = 0;
         if (!shouldBeMaster && !shouldBeOverlord && (currentAdmin || ADMIN_EMAILS.includes(emailLower))) shouldBeAdmin = 1;
+        console.log(`[login-reconcile] email=${emailLower} currentMaster=${currentMaster} currentAdmin=${currentAdmin} inMasterList=${MASTER_EMAILS.includes(emailLower)} inAdminList=${ADMIN_EMAILS.includes(emailLower)} -> shouldBeMaster=${shouldBeMaster} shouldBeAdmin=${shouldBeAdmin}`);
         if (currentAdmin !== shouldBeAdmin || currentMaster !== shouldBeMaster || currentOverlord !== shouldBeOverlord) {
             await pool.request()
                 .input('isAdmin', sql.Bit, shouldBeAdmin)
@@ -1985,23 +1987,56 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
                 .input('id', sql.Int, userId)
                 .query('SELECT email, department FROM users WHERE id = @id');
             if (userResult.recordset.length === 0) return res.status(404).json({ error: 'User not found' });
-            const { email: userEmail, department: userDept } = userResult.recordset[0];
+            const rawEmail = userResult.recordset[0].email || '';
+            const userEmail = rawEmail.trim().toLowerCase();
+            const rawDept = userResult.recordset[0].department;
+            // master_emails has CHECK (department IN ('QA','SE','SDET') OR NULL).
+            // Use NULL when the user's department isn't one of the allowed values so the INSERT can't fail.
+            const safeDept = (rawDept && ['QA', 'SE', 'SDET'].includes(rawDept)) ? rawDept : null;
+            console.log(`[master-toggle] start userId=${userId} email=${userEmail} val=${val} caller=${req.user.email}`);
+
             if (val === 1) {
+                // 1. Promote the user record
                 await pool.request().input('id', sql.Int, userId).query('UPDATE users SET is_master = 1, is_admin = 0 WHERE id = @id');
+                // 2. Ensure master_emails has this email (case-insensitive check, lowercase stored)
                 await pool.request()
                     .input('email', sql.NVarChar(255), userEmail)
-                    .input('dept', sql.NVarChar(10), userDept || 'QA')
-                    .query(`IF NOT EXISTS (SELECT 1 FROM master_emails WHERE email = @email) INSERT INTO master_emails (email, department) VALUES (@email, @dept)`);
-                await pool.request().input('email', sql.NVarChar(255), userEmail).query('DELETE FROM admin_emails WHERE email = @email');
+                    .input('dept', sql.NVarChar(10), safeDept)
+                    .query(`IF NOT EXISTS (SELECT 1 FROM master_emails WHERE LOWER(email) = @email)
+                            INSERT INTO master_emails (email, department) VALUES (@email, @dept)`);
+                // 3. Drop them from admin_emails so login reconciliation can't downgrade them
+                await pool.request().input('email', sql.NVarChar(255), userEmail).query('DELETE FROM admin_emails WHERE LOWER(email) = @email');
             } else {
                 await pool.request().input('id', sql.Int, userId).query('UPDATE users SET is_master = 0 WHERE id = @id');
                 await pool.request()
                     .input('email', sql.NVarChar(255), userEmail)
-                    .query('DELETE FROM master_emails WHERE email = @email');
+                    .query('DELETE FROM master_emails WHERE LOWER(email) = @email');
             }
+
             await Promise.all([reloadMasterEmails(), reloadAdminEmails()]);
-            res.json({ success: true });
-        } catch (error) { res.status(500).json({ error: error.message }); }
+
+            // Verify the writes actually persisted. If verification fails, surface a 500 instead of a false success.
+            const verify = await pool.request()
+                .input('id', sql.Int, userId)
+                .input('email', sql.NVarChar(255), userEmail)
+                .query(`SELECT u.is_master AS user_master,
+                               (SELECT COUNT(*) FROM master_emails WHERE LOWER(email) = @email) AS in_master_table,
+                               (SELECT COUNT(*) FROM admin_emails  WHERE LOWER(email) = @email) AS in_admin_table
+                        FROM users u WHERE u.id = @id`);
+            const v = verify.recordset[0] || {};
+            const inMemory = MASTER_EMAILS.includes(userEmail) ? 1 : 0;
+            console.log(`[master-toggle] verify userId=${userId} email=${userEmail} target=${val} users.is_master=${v.user_master} master_emails=${v.in_master_table} admin_emails=${v.in_admin_table} inMemory=${inMemory}`);
+
+            if (val === 1 && (!(v.user_master === 1 || v.user_master === true) || Number(v.in_master_table) === 0 || inMemory === 0)) {
+                console.error('[master-toggle] PROMOTION VERIFICATION FAILED', { userId, email: userEmail, verify: v, inMemory });
+                return res.status(500).json({ error: 'Master promotion did not persist. Check server logs.' });
+            }
+
+            res.json({ success: true, is_master: val === 1, email: userEmail });
+        } catch (error) {
+            console.error('[master-toggle] error', error);
+            res.status(500).json({ error: error.message });
+        }
         return;
     }
 
