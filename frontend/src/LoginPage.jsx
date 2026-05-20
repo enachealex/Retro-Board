@@ -54,6 +54,8 @@ export default function LoginPage({ onGoToRegister }) {
   const [forgotMessage, setForgotMessage] = useState(null);
   const [forgotResetUrl, setForgotResetUrl] = useState("");
   const [forgotResetToken, setForgotResetToken] = useState("");
+  const [showForgotResetToken, setShowForgotResetToken] = useState(false);
+  const [forgotCopyMessage, setForgotCopyMessage] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
   const [verificationResendEmail, setVerificationResendEmail] = useState("");
   const [verificationResendMessage, setVerificationResendMessage] = useState(null);
@@ -182,6 +184,8 @@ export default function LoginPage({ onGoToRegister }) {
     setForgotMessage(null);
     setForgotResetUrl("");
     setForgotResetToken("");
+    setShowForgotResetToken(false);
+    setForgotCopyMessage("");
     try {
       const res = await axios.post(`${getAuthUrl()}/request-password-reset`, { email: forgotEmail.trim() });
       if (res.data?.delivery === "manual") {
@@ -195,6 +199,19 @@ export default function LoginPage({ onGoToRegister }) {
       setForgotMessage(err.response?.data?.error || "Could not send reset email right now.");
     } finally {
       setForgotLoading(false);
+    }
+  };
+
+  const handleCopyForgotResetLink = async () => {
+    if (!forgotResetUrl) return;
+    try {
+      if (!globalThis.navigator?.clipboard?.writeText) {
+        throw new Error("clipboard unavailable");
+      }
+      await globalThis.navigator.clipboard.writeText(forgotResetUrl);
+      setForgotCopyMessage("Reset link copied.");
+    } catch {
+      setForgotCopyMessage("Could not copy automatically. Please copy the link manually.");
     }
   };
 
@@ -602,12 +619,31 @@ export default function LoginPage({ onGoToRegister }) {
               </div>
               {forgotMessage && <div className="auth-info">{forgotMessage}</div>}
               {forgotResetUrl && (
-                <div className="auth-info">
-                  Manual reset link: <a href={forgotResetUrl} style={{ wordBreak: "break-all" }}>{forgotResetUrl}</a>
+                <div className="auth-manual-panel" role="status" aria-live="polite">
+                  <p className="auth-manual-title">Use this manual reset link.</p>
+                  <div className="auth-manual-actions">
+                    <a href={forgotResetUrl} className="auth-btn-primary auth-btn-inline">Open Reset Link</a>
+                    <button type="button" className="auth-btn-secondary auth-btn-inline" onClick={handleCopyForgotResetLink}>Copy Link</button>
+                  </div>
+                  {forgotCopyMessage ? <p className="auth-manual-message">{forgotCopyMessage}</p> : null}
+                  <p className="auth-manual-link">
+                    <a href={forgotResetUrl}>{forgotResetUrl}</a>
+                  </p>
                 </div>
               )}
               {forgotResetToken && (
-                <div className="auth-info">Manual reset token: <strong>{forgotResetToken}</strong></div>
+                <div className="auth-manual-token-wrap">
+                  <button
+                    type="button"
+                    className="auth-link-btn"
+                    onClick={() => setShowForgotResetToken((prev) => !prev)}
+                  >
+                    {showForgotResetToken ? "Hide reset token" : "Show reset token"}
+                  </button>
+                  {showForgotResetToken ? (
+                    <div className="auth-info auth-manual-token">{forgotResetToken}</div>
+                  ) : null}
+                </div>
               )}
               <button className="auth-btn-primary" type="button" onClick={handleForgotSubmit} disabled={forgotLoading || !forgotEmail.trim()}>
                 {forgotLoading ? "Sending…" : "Send Reset Link"}
