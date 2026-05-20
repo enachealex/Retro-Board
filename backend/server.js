@@ -2053,6 +2053,34 @@ app.get('/api/companies', async (req, res) => {
     }
 });
 
+app.delete('/api/companies/:companyName', authMiddleware, async (req, res) => {
+    if (!req.user.is_master) return res.status(403).json({ error: 'Access denied' });
+
+    const companyName = String(decodeURIComponent(req.params.companyName || '')).trim();
+    const requesterCompany = String(req.user.company || DEFAULT_COMPANY).trim();
+    if (!companyName) return res.status(400).json({ error: 'Company name is required' });
+    if (companyName === DEFAULT_COMPANY) return res.status(400).json({ error: 'Default company cannot be removed' });
+    if (companyName === requesterCompany) return res.status(400).json({ error: 'You cannot remove your active company' });
+
+    try {
+        const [existing] = await pool.query('SELECT id FROM companies WHERE name = ? LIMIT 1', [companyName]);
+        if (existing.length === 0) return res.status(404).json({ error: 'Company not found' });
+
+        const [[usersCount]] = await pool.query('SELECT COUNT(*) AS count FROM users WHERE company = ?', [companyName]);
+        const [[boardsCount]] = await pool.query('SELECT COUNT(*) AS count FROM boards WHERE company = ?', [companyName]);
+        if (Number(usersCount.count || 0) > 0 || Number(boardsCount.count || 0) > 0) {
+            return res.status(409).json({ error: 'Cannot remove company while users or boards still belong to it' });
+        }
+
+        await pool.query('DELETE FROM companies WHERE name = ?', [companyName]);
+        await pool.query('DELETE FROM role_labels WHERE company = ?', [companyName]);
+        res.json({ success: true });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ error: error.message });
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/api/auth/request-password-reset', authLimiter, async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ error: 'email is required' });

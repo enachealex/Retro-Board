@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import axios from "axios";
 import { io } from "socket.io-client";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import { Trash2, Plus, GripVertical, X, Edit2, Check, Moon, Sun, User, Users, Settings, Info, Archive, ChevronDown, ChevronLeft, ChevronRight, LogOut, Eye, EyeOff, MoveRight, Image, UserPlus, UserMinus, Search, Upload, SmilePlus } from "lucide-react";
+import { Trash2, Plus, GripVertical, X, Edit2, Check, Moon, Sun, User, Users, Settings, Info, Archive, ChevronDown, ChevronLeft, ChevronRight, LogOut, Eye, EyeOff, MoveRight, Image, UserPlus, UserMinus, Search, Upload, SmilePlus, Lock } from "lucide-react";
 import "./App.css";
 import { useAuth } from "./AuthContext";
 import { getApiUrl, getSocketUrl, DEFAULT_COMPANY } from "./config";
@@ -289,6 +289,7 @@ const App = () => {
   const [usersLoading, setUsersLoading] = useState(false);
   const [companyFilterOptions, setCompanyFilterOptions] = useState([]);
   const [masterCompanyFilter, setMasterCompanyFilter] = useState(() => user?.company || DEFAULT_COMPANY);
+  const [companyDropdownOpen, setCompanyDropdownOpen] = useState(false);
   const [editingUserId, setEditingUserId] = useState(null);
   const [editUserDept, setEditUserDept] = useState("");
   const [editUserLead, setEditUserLead] = useState("");
@@ -472,6 +473,27 @@ const App = () => {
       console.error("Error fetching companies", e);
       setCompanyFilterOptions([]);
     }
+  };
+
+  const removeCompanyOption = async (companyName) => {
+    const target = String(companyName || '').trim();
+    if (!target) return;
+
+    const ownerCompany = user?.company || DEFAULT_COMPANY;
+    if (target === DEFAULT_COMPANY || target === ownerCompany) return;
+
+    showConfirm(`Remove "${target}" from the company list?`, async () => {
+      try {
+        await axios.delete(`${API_URL}/companies/${encodeURIComponent(target)}`, authHeaders(token));
+        if (effectiveCompanyFilter === target) {
+          setMasterCompanyFilter(ownerCompany);
+        }
+        await fetchCompanyFilterOptions();
+      } catch (e) {
+        console.error("Error removing company", e);
+        alert(e.response?.data?.error || "Failed to remove company");
+      }
+    });
   };
 
   useEffect(() => {
@@ -958,14 +980,20 @@ const App = () => {
     if (rect.bottom > window.innerHeight - pad) {
       y = Math.max(pad, window.innerHeight - rect.height - pad);
     }
+    if (rect.top < pad) {
+      y = pad;
+    }
     if (rect.right > window.innerWidth - pad) {
       x = Math.max(pad, window.innerWidth - rect.width - pad);
+    }
+    if (rect.left < pad) {
+      x = pad;
     }
     if (x !== contextMenu.x || y !== contextMenu.y) {
       el.style.top = y + 'px';
       el.style.left = x + 'px';
     }
-  }, [contextMenu]);
+  }, [contextMenu, expandedDepts]);
 
   // Archived items
   const [archivedCards, setArchivedCards] = useState(() => {
@@ -992,6 +1020,7 @@ const App = () => {
     const handleClick = () => {
       setContextMenu(null);
       setExpandedDepts({});
+      setCompanyDropdownOpen(false);
       setIsProfileOpen(false);
       setIsBoardUsersOpen(false);
       setShowFontSlider(false);
@@ -2603,15 +2632,73 @@ const App = () => {
             {isSuperUser && (sidebarPanel === "boards" || sidebarPanel === "users" || sidebarPanel === "labels") && (
               <div className="sidebar-company-filter-row">
                 <span className="sidebar-company-filter-label">Company</span>
-                <select
-                  className="sidebar-company-filter-select"
-                  value={effectiveCompanyFilter}
-                  onChange={(e) => setMasterCompanyFilter(e.target.value)}
+                <div
+                  className="sidebar-company-filter-picker"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  {[...new Set([user?.company || DEFAULT_COMPANY, ...companyFilterOptions])].map((name) => (
-                    <option key={name} value={name}>{name}</option>
-                  ))}
-                </select>
+                  <button
+                    type="button"
+                    className="sidebar-company-filter-trigger"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setCompanyDropdownOpen(prev => !prev);
+                    }}
+                  >
+                    <span className="sidebar-company-filter-value">{effectiveCompanyFilter}</span>
+                    <ChevronDown size={14} className={`sidebar-company-filter-caret${companyDropdownOpen ? ' open' : ''}`} />
+                  </button>
+
+                  {companyDropdownOpen && (
+                    <div className="sidebar-company-filter-menu">
+                      {[...new Set([user?.company || DEFAULT_COMPANY, ...companyFilterOptions])].map((name) => {
+                        const ownerCompany = user?.company || DEFAULT_COMPANY;
+                        const isDefaultCompany = name === DEFAULT_COMPANY;
+                        const isActiveCompany = name === ownerCompany;
+                        const canRemove = !isDefaultCompany && !isActiveCompany;
+                        const removeReason = isDefaultCompany
+                          ? "Default company cannot be removed"
+                          : isActiveCompany
+                            ? "Your active company cannot be removed"
+                            : `Remove ${name}`;
+                        return (
+                          <div key={name} className={`sidebar-company-filter-option${effectiveCompanyFilter === name ? ' active' : ''}`}>
+                            <button
+                              type="button"
+                              className="sidebar-company-filter-option-btn"
+                              onClick={() => {
+                                setMasterCompanyFilter(name);
+                                setCompanyDropdownOpen(false);
+                              }}
+                            >
+                              <span className="sidebar-company-filter-option-name">{name}</span>
+                              {!canRemove && (
+                                <span className="sidebar-company-filter-protected" title={removeReason}>
+                                  <Lock size={11} />
+                                  <span>Protected</span>
+                                </span>
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              className="sidebar-company-filter-remove"
+                              title={removeReason}
+                              disabled={!canRemove}
+                              aria-label={removeReason}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!canRemove) return;
+                                setCompanyDropdownOpen(false);
+                                removeCompanyOption(name);
+                              }}
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             {/* Boards panel */}
@@ -3086,8 +3173,8 @@ const App = () => {
                         setContextMenu(null);
                         try {
                           await axios.patch(`${API_URL}/users/${userId}`, { is_admin: newVal }, authHeaders(token));
-                          setUsersList(prev => prev.map(x => x.id === userId ? { ...x, is_admin: newVal } : x));
-                          fetchLeads();
+                          setUsersList(prev => prev.map(x => Number(x.id) === Number(userId) ? { ...x, is_admin: newVal } : x));
+                          await Promise.all([fetchUsers(), fetchLeads()]);
                         } catch(e) { console.error(e); }
                       }}>
                         <Settings size={14} /> {u.is_admin ? 'Revoke Admin' : 'Grant Admin'}
@@ -3109,7 +3196,8 @@ const App = () => {
                           async () => {
                             try {
                               await axios.patch(`${API_URL}/users/${userId}`, { is_master: newVal }, authHeaders(token));
-                              setUsersList(prev => prev.map(x => x.id === userId ? { ...x, is_master: newVal, is_admin: newVal ? 0 : x.is_admin } : x));
+                              setUsersList(prev => prev.map(x => Number(x.id) === Number(userId) ? { ...x, is_master: newVal, is_admin: newVal ? 0 : x.is_admin } : x));
+                              await Promise.all([fetchUsers(), fetchLeads(), fetchMasterEmails()]);
                             } catch(e) { console.error(e); }
                           }
                         );
