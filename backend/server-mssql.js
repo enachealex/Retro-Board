@@ -1404,7 +1404,6 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     const emailLower = (email || '').toLowerCase();
     const isMasterEmail = MASTER_EMAILS.includes(emailLower);
     const isOverlordEmail = OVERLORD_EMAILS.includes(emailLower);
-    const verificationFallbackKey = String(req.get('x-verify-fallback-key') || '');
 
     let callerIsMaster = false;
     let callerIsOverlord = false;
@@ -1484,16 +1483,13 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
                 await issueEmailVerification(user);
                 return res.status(200).json(emailVerificationResponse(user));
             } catch {
-                if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
-                    const { token, verificationUrl } = await createEmailVerificationToken(user);
-                    return res.status(200).json({
-                        ...emailVerificationResponse(user),
-                        delivery: 'manual',
-                        verificationToken: token,
-                        verificationUrl,
-                    });
-                }
-                return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+                const { token, verificationUrl } = await createEmailVerificationToken(user);
+                return res.status(200).json({
+                    ...emailVerificationResponse(user),
+                    delivery: 'manual',
+                    verificationToken: token,
+                    verificationUrl,
+                });
             }
         }
 
@@ -1502,16 +1498,13 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
                 await issueEmailVerification(existResult.recordset[0]);
                 return res.status(200).json(emailVerificationResponse(existResult.recordset[0]));
             } catch {
-                if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
-                    const { token, verificationUrl } = await createEmailVerificationToken(existResult.recordset[0]);
-                    return res.status(200).json({
-                        ...emailVerificationResponse(existResult.recordset[0]),
-                        delivery: 'manual',
-                        verificationToken: token,
-                        verificationUrl,
-                    });
-                }
-                return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+                const { token, verificationUrl } = await createEmailVerificationToken(existResult.recordset[0]);
+                return res.status(200).json({
+                    ...emailVerificationResponse(existResult.recordset[0]),
+                    delivery: 'manual',
+                    verificationToken: token,
+                    verificationUrl,
+                });
             }
         }
 
@@ -1612,16 +1605,13 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
             await issueEmailVerification(newUser);
             res.status(201).json(emailVerificationResponse(newUser));
         } catch {
-            if (isValidEmailVerificationFallbackKey(verificationFallbackKey)) {
-                const { token, verificationUrl } = await createEmailVerificationToken(newUser);
-                return res.status(201).json({
-                    ...emailVerificationResponse(newUser),
-                    delivery: 'manual',
-                    verificationToken: token,
-                    verificationUrl,
-                });
-            }
-            return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+            const { token, verificationUrl } = await createEmailVerificationToken(newUser);
+            return res.status(201).json({
+                ...emailVerificationResponse(newUser),
+                delivery: 'manual',
+                verificationToken: token,
+                verificationUrl,
+            });
         }
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
@@ -1761,11 +1751,11 @@ app.post('/api/auth/resend-verification', authLimiter, async (req, res) => {
                 const { token, verificationUrl } = await createEmailVerificationToken(result.recordset[0]);
                 return res.json({ success: true, delivery: 'manual', verificationToken: token, verificationUrl });
             }
-            return res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+            return res.json({ success: true, delivery: 'email_unavailable' });
         }
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
-        res.status(502).json({ error: 'Failed to send confirmation email. Please try again later.' });
+        res.json({ success: true, delivery: 'email_unavailable' });
     }
 });
 

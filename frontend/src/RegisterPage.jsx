@@ -30,6 +30,8 @@ export default function RegisterPage({ onGoToLogin }) {
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
   const [manualVerificationUrl, setManualVerificationUrl] = useState("");
   const [manualVerificationToken, setManualVerificationToken] = useState("");
+  const [showManualToken, setShowManualToken] = useState(false);
+  const [copyMessage, setCopyMessage] = useState("");
   const [verificationResendLoading, setVerificationResendLoading] = useState(false);
   const [verificationResendMessage, setVerificationResendMessage] = useState("");
 
@@ -144,6 +146,8 @@ export default function RegisterPage({ onGoToLogin }) {
       setPendingVerificationEmail(result.email || email.trim());
       setManualVerificationUrl(result.delivery === "manual" ? (result.verificationUrl || "") : "");
       setManualVerificationToken(result.delivery === "manual" ? (result.verificationToken || "") : "");
+      setShowManualToken(false);
+      setCopyMessage("");
       setVerificationResendMessage("");
       setSecurityStep(false);
       setCaptcha({ token: "", answer: "" });
@@ -162,16 +166,31 @@ export default function RegisterPage({ onGoToLogin }) {
       if (res.data?.delivery === "manual") {
         setManualVerificationUrl(res.data?.verificationUrl || "");
         setManualVerificationToken(res.data?.verificationToken || "");
+        setShowManualToken(false);
         setVerificationResendMessage("Email delivery is unavailable right now. Use the manual verification link below.");
       } else {
         setManualVerificationUrl("");
         setManualVerificationToken("");
+        setShowManualToken(false);
         setVerificationResendMessage("If this account still needs confirmation, a new link has been sent.");
       }
     } catch (err) {
       setVerificationResendMessage(err.response?.data?.error || "Could not resend confirmation email right now.");
     } finally {
       setVerificationResendLoading(false);
+    }
+  };
+
+  const handleCopyManualLink = async () => {
+    if (!manualVerificationUrl) return;
+    try {
+      if (!globalThis.navigator?.clipboard?.writeText) {
+        throw new Error("clipboard unavailable");
+      }
+      await globalThis.navigator.clipboard.writeText(manualVerificationUrl);
+      setCopyMessage("Verification link copied.");
+    } catch {
+      setCopyMessage("Could not copy link automatically. Please copy it manually.");
     }
   };
 
@@ -205,13 +224,43 @@ export default function RegisterPage({ onGoToLogin }) {
           ) : null}
 
           {manualVerificationUrl ? (
-            <output className="auth-info">
-              Manual verification link: <a href={manualVerificationUrl} style={{ wordBreak: "break-all" }}>{manualVerificationUrl}</a>
-            </output>
+            <div className="auth-manual-panel" role="status" aria-live="polite">
+              <p className="auth-manual-title">Email delivery is unavailable. Verify with the link below.</p>
+              <div className="auth-manual-actions">
+                <a
+                  href={manualVerificationUrl}
+                  className="auth-btn-primary auth-btn-inline"
+                >
+                  Open Verification Link
+                </a>
+                <button
+                  type="button"
+                  className="auth-btn-secondary auth-btn-inline"
+                  onClick={handleCopyManualLink}
+                >
+                  Copy Link
+                </button>
+              </div>
+              {copyMessage ? <p className="auth-manual-message">{copyMessage}</p> : null}
+              <p className="auth-manual-link">
+                <a href={manualVerificationUrl}>{manualVerificationUrl}</a>
+              </p>
+            </div>
           ) : null}
 
           {manualVerificationToken ? (
-            <output className="auth-info">Manual verification token: <strong>{manualVerificationToken}</strong></output>
+            <div className="auth-manual-token-wrap">
+              <button
+                type="button"
+                className="auth-link-btn"
+                onClick={() => setShowManualToken((prev) => !prev)}
+              >
+                {showManualToken ? "Hide manual token" : "Show manual token"}
+              </button>
+              {showManualToken ? (
+                <output className="auth-info auth-manual-token">{manualVerificationToken}</output>
+              ) : null}
+            </div>
           ) : null}
 
           <button

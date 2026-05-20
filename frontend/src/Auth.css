@@ -406,6 +406,16 @@
   cursor: not-allowed;
 }
 
+.auth-btn-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  margin-top: 0;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+}
+
 .auth-btn-secondary {
   padding: 12px 13px;
   background: #ffffff;
@@ -429,6 +439,56 @@
 .auth-btn-secondary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.auth-manual-panel {
+  background: #f7fbff;
+  border: 1px solid #9fd8ff;
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-manual-title {
+  margin: 0;
+  color: #003a73;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.auth-manual-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auth-manual-link {
+  margin: 0;
+  font-size: 0.84rem;
+  word-break: break-all;
+}
+
+.auth-manual-link a {
+  color: #004f95;
+}
+
+.auth-manual-message {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #005f2f;
+}
+
+.auth-manual-token-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.auth-manual-token {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  word-break: break-all;
 }
 
 /* Switch prompt */
