@@ -52,6 +52,8 @@ export default function LoginPage({ onGoToRegister }) {
   const [showForgot, setShowForgot] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotMessage, setForgotMessage] = useState(null);
+  const [forgotResetUrl, setForgotResetUrl] = useState("");
+  const [forgotResetToken, setForgotResetToken] = useState("");
   const [forgotLoading, setForgotLoading] = useState(false);
   const [verificationResendEmail, setVerificationResendEmail] = useState("");
   const [verificationResendMessage, setVerificationResendMessage] = useState(null);
@@ -178,9 +180,17 @@ export default function LoginPage({ onGoToRegister }) {
     }
     setForgotLoading(true);
     setForgotMessage(null);
+    setForgotResetUrl("");
+    setForgotResetToken("");
     try {
-      await axios.post(`${getAuthUrl()}/request-password-reset`, { email: forgotEmail.trim() });
-      setForgotMessage("If that email exists, a reset link has been sent.");
+      const res = await axios.post(`${getAuthUrl()}/request-password-reset`, { email: forgotEmail.trim() });
+      if (res.data?.delivery === "manual") {
+        setForgotResetUrl(res.data?.resetUrl || "");
+        setForgotResetToken(res.data?.resetToken || "");
+        setForgotMessage("Email delivery is unavailable right now. Use the manual reset link below.");
+      } else {
+        setForgotMessage("If that email exists, a reset link has been sent.");
+      }
     } catch (err) {
       setForgotMessage(err.response?.data?.error || "Could not send reset email right now.");
     } finally {
@@ -591,6 +601,14 @@ export default function LoginPage({ onGoToRegister }) {
                 />
               </div>
               {forgotMessage && <div className="auth-info">{forgotMessage}</div>}
+              {forgotResetUrl && (
+                <div className="auth-info">
+                  Manual reset link: <a href={forgotResetUrl} style={{ wordBreak: "break-all" }}>{forgotResetUrl}</a>
+                </div>
+              )}
+              {forgotResetToken && (
+                <div className="auth-info">Manual reset token: <strong>{forgotResetToken}</strong></div>
+              )}
               <button className="auth-btn-primary" type="button" onClick={handleForgotSubmit} disabled={forgotLoading || !forgotEmail.trim()}>
                 {forgotLoading ? "Sending…" : "Send Reset Link"}
               </button>

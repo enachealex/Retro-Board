@@ -1782,11 +1782,20 @@ app.post('/api/auth/request-password-reset', authLimiter, async (req, res) => {
             .query('INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (@userId, @tokenHash, DATEADD(MINUTE, @expires, GETDATE()))');
 
         const resetUrl = `${getAppBaseUrl()}/?reset=${encodeURIComponent(token)}`;
-        await sendPasswordResetEmail(user.email, resetUrl);
+        try {
+            await sendPasswordResetEmail(user.email, resetUrl);
+        } catch {
+            return res.json({
+                success: true,
+                delivery: 'manual',
+                resetToken: token,
+                resetUrl,
+            });
+        }
         res.json({ success: true });
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
-        res.status(502).json({ error: 'Failed to send reset email. Please check your SMTP configuration or try again later.' });
+        res.status(500).json({ error: error.message });
     }
 });
 

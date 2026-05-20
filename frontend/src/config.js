@@ -5,6 +5,10 @@ const SERVER_HOST = import.meta.env.VITE_SERVER_HOST || 'api.thejumpvault.com';
 
 // When baked in at build time (e.g. GitHub Pages CI), this overrides all other resolution.
 const VITE_API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const STATIC_SITE_HOSTS = new Set([
+  'retroboard.thejumpvault.com',
+  'enachealex.github.io',
+]);
 
 // Default company name — override with VITE_DEFAULT_COMPANY in .env or .env.local
 export const DEFAULT_COMPANY = import.meta.env.VITE_DEFAULT_COMPANY || 'RetroBoard';
@@ -30,8 +34,15 @@ let _resolvedBase = null;
 function getBaseUrl() {
   if (_resolvedBase) return _resolvedBase;
   if (VITE_API_BASE_URL) {
-    _resolvedBase = VITE_API_BASE_URL;
-    return _resolvedBase;
+    try {
+      const parsed = new URL(VITE_API_BASE_URL);
+      if (!STATIC_SITE_HOSTS.has(parsed.hostname)) {
+        _resolvedBase = VITE_API_BASE_URL;
+        return _resolvedBase;
+      }
+    } catch {
+      // Invalid build-time URL is ignored and normal resolution will be used.
+    }
   }
   // Dev mode (vite dev server on localhost) — use relative URLs, Vite proxy handles routing
   if (isViteDevRuntime) {
