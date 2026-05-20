@@ -114,6 +114,10 @@ export default function LoginPage({ onGoToRegister }) {
           error: err.response?.data?.error || "Could not confirm this email link.",
           email: "",
         });
+        const params = new URLSearchParams(globalThis.location.search);
+        params.delete('verify');
+        const qs = params.toString();
+        globalThis.history.replaceState({}, '', qs ? `${globalThis.location.pathname}?${qs}` : globalThis.location.pathname);
       });
     return () => { cancelled = true; };
   }, [verifyToken]);
@@ -216,11 +220,6 @@ export default function LoginPage({ onGoToRegister }) {
         token: resetToken,
         newPassword: resetPassword,
       });
-      const params = new URLSearchParams(globalThis.location.search);
-      params.delete('reset');
-      const qs = params.toString();
-      const cleanUrl = qs ? `${globalThis.location.pathname}?${qs}` : globalThis.location.pathname;
-      globalThis.history.replaceState({}, '', cleanUrl);
       setResetToken("");
       setResetPassword("");
       setResetConfirm("");
@@ -229,6 +228,10 @@ export default function LoginPage({ onGoToRegister }) {
     } catch (err) {
       setResetError(err.response?.data?.error || "Failed to reset password.");
     } finally {
+      const params = new URLSearchParams(globalThis.location.search);
+      params.delete('reset');
+      const qs = params.toString();
+      globalThis.history.replaceState({}, '', qs ? `${globalThis.location.pathname}?${qs}` : globalThis.location.pathname);
       setResetLoading(false);
     }
   };
