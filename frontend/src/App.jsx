@@ -1539,6 +1539,9 @@ const App = () => {
       ? `Delete "${colName}" and its ${cardCount} card${cardCount > 1 ? 's' : ''}? This cannot be undone.`
       : `Delete "${colName}"? This cannot be undone.`;
     showConfirm(msg, async () => {
+      const previousColumns = columns;
+      const previousCards = cards;
+
       // Track this column as pending-delete so WebSocket won't restore it
       pendingColumnDeletes.current.add(colId);
 
@@ -1552,6 +1555,10 @@ const App = () => {
         }
       } catch (error) {
         console.error("Error deleting column", error);
+        pendingColumnDeletes.current.delete(colId);
+        setColumns(previousColumns);
+        setCards(previousCards);
+        alert(error?.response?.data?.error || "Could not delete this column. It may be protected or you may not have permission.");
       }
     });
   };
