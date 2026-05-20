@@ -662,6 +662,79 @@ if (httpsServer) {
     io.attach(httpsServer, { cors: corsOptions });
 }
 
+const SECURITY_ALERT_WEBHOOK_URL = String(process.env.SECURITY_ALERT_WEBHOOK_URL || '').trim();
+const SECURITY_ALERT_SECRET = String(process.env.SECURITY_ALERT_SECRET || '').trim();
+
+function requestIp(req) {
+    return String(req.ip || req.socket?.remoteAddress || 'unknown');
+}
+
+function hashForLog(value) {
+    return crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, 16);
+}
+
+function securityIdentityFromRequest(req) {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (email) return `email:${email}`;
+    if (req.user?.sub || req.user?.id) return `user:${req.user.sub || req.user.id}`;
+    const token = String(req.body?.token || '').trim();
+    if (token) return `token:${hashForLog(token)}`;
+    return 'anonymous';
+}
+
+async function sendSecurityAlert(event) {
+    if (!SECURITY_ALERT_WEBHOOK_URL) return;
+    try {
+        const headers = { 'content-type': 'application/json' };
+        if (SECURITY_ALERT_SECRET) headers['x-security-alert-secret'] = SECURITY_ALERT_SECRET;
+        await fetch(SECURITY_ALERT_WEBHOOK_URL, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(event),
+        });
+    } catch (err) {
+        console.error('[SECURITY]', JSON.stringify({ type: 'alert_hook_failed', reason: err.message }));
+    }
+}
+
+function logSecurityEvent(type, details = {}, level = 'warn') {
+    const event = {
+        ts: new Date().toISOString(),
+        type,
+        ...details,
+    };
+    const line = `[SECURITY] ${JSON.stringify(event)}`;
+    if (level === 'error') console.error(line);
+    else if (level === 'info') console.info(line);
+    else console.warn(line);
+
+    if (SECURITY_ALERT_WEBHOOK_URL && (level === 'error' || details.alert === true)) {
+        void sendSecurityAlert(event);
+    }
+}
+
+function createIdentityLimiter({ windowMs, max, message, eventName, keyBuilder }) {
+    return rateLimit({
+        windowMs,
+        max,
+        standardHeaders: true,
+        legacyHeaders: false,
+        keyGenerator: (req) => keyBuilder(req),
+        message: { error: message },
+        handler: (req, res, _next, options) => {
+            logSecurityEvent('rate_limit_exceeded', {
+                alert: true,
+                eventName,
+                ip: requestIp(req),
+                key: keyBuilder(req),
+                method: req.method,
+                path: req.originalUrl,
+            });
+            res.status(options.statusCode).json(options.message);
+        },
+    });
+}
+
 function getSocketToken(socket) {
     const authToken = socket?.handshake?.auth?.token;
     if (typeof authToken === 'string' && authToken.trim()) {
@@ -678,13 +751,36 @@ function getSocketToken(socket) {
 io.use(async (socket, next) => {
     try {
         const token = getSocketToken(socket);
-        if (!token) return next(new Error('Unauthorized'));
+        if (!token) {
+            logSecurityEvent('socket_auth_failed', {
+                alert: true,
+                reason: 'missing_token',
+                socketId: socket.id,
+                ip: socket.handshake?.address || 'unknown',
+            });
+            return next(new Error('Unauthorized'));
+        }
 
         const payload = verifyJwt(token);
-        if (!payload) return next(new Error('Unauthorized'));
+        if (!payload) {
+            logSecurityEvent('socket_auth_failed', {
+                alert: true,
+                reason: 'invalid_token',
+                socketId: socket.id,
+                ip: socket.handshake?.address || 'unknown',
+            });
+            return next(new Error('Unauthorized'));
+        }
 
         const currentUser = await getCurrentUserForAuth(payload.sub);
         if (!currentUser || !currentUser.email_verified_at) {
+            logSecurityEvent('socket_auth_failed', {
+                alert: true,
+                reason: 'user_missing_or_unverified',
+                socketId: socket.id,
+                userId: payload.sub,
+                ip: socket.handshake?.address || 'unknown',
+            });
             return next(new Error('Unauthorized'));
         }
 
@@ -695,7 +791,13 @@ io.use(async (socket, next) => {
             id: currentUser.id,
         };
         next();
-    } catch {
+    } catch (err) {
+        logSecurityEvent('socket_auth_error', {
+            alert: true,
+            reason: err.message,
+            socketId: socket.id,
+            ip: socket.handshake?.address || 'unknown',
+        }, 'error');
         next(new Error('Unauthorized'));
     }
 });
@@ -705,28 +807,28 @@ app.use(compression());
 app.use(express.json());
 
 // --- Rate Limiters ---
-const authLimiter = rateLimit({
+const authLimiter = createIdentityLimiter({
     windowMs: 15 * 60 * 1000,
     max: 15,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many attempts, please try again later' },
+    message: 'Too many attempts, please try again later',
+    eventName: 'auth',
+    keyBuilder: (req) => `${securityIdentityFromRequest(req)}|ip:${requestIp(req)}`,
 });
 
-const registerLimiter = rateLimit({
+const registerLimiter = createIdentityLimiter({
     windowMs: 60 * 60 * 1000,
     max: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many accounts created, please try again later' },
+    message: 'Too many accounts created, please try again later',
+    eventName: 'register',
+    keyBuilder: (req) => `${securityIdentityFromRequest(req)}|ip:${requestIp(req)}`,
 });
 
-const passwordLimiter = rateLimit({
+const passwordLimiter = createIdentityLimiter({
     windowMs: 15 * 60 * 1000,
     max: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many password change attempts, please try again later' },
+    message: 'Too many password change attempts, please try again later',
+    eventName: 'password',
+    keyBuilder: (req) => `${securityIdentityFromRequest(req)}|ip:${requestIp(req)}`,
 });
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
@@ -1183,6 +1285,13 @@ io.on('connection', (socket) => {
 
     socket.on('register:user', (userId) => {
         if (!socket.userId || Number(userId) !== Number(socket.userId)) {
+            logSecurityEvent('socket_register_mismatch', {
+                alert: true,
+                socketId: socket.id,
+                expectedUserId: socket.userId,
+                receivedUserId: userId,
+                ip: socket.handshake?.address || 'unknown',
+            });
             socket.emit('socket:error', { error: 'User registration mismatch' });
         }
     });
@@ -1192,6 +1301,13 @@ io.on('connection', (socket) => {
             socket.join(`board:${boardId}`);
         } catch (err) {
             if (err?.status === 403 || err?.status === 404) {
+                logSecurityEvent('socket_board_join_denied', {
+                    alert: true,
+                    socketId: socket.id,
+                    userId: socket.user?.id || socket.user?.sub,
+                    boardId,
+                    ip: socket.handshake?.address || 'unknown',
+                });
                 socket.emit('socket:error', { error: 'Access denied' });
                 return;
             }
@@ -1513,7 +1629,14 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         const result = await pool.request()
             .input('email', sql.NVarChar(255), email.trim().toLowerCase())
             .query('SELECT * FROM users WHERE email = @email');
-        if (result.recordset.length === 0) return res.status(401).json({ error: 'Invalid email or password' });
+        if (result.recordset.length === 0) {
+            logSecurityEvent('auth_login_failed', {
+                ip: requestIp(req),
+                identity: securityIdentityFromRequest(req),
+                reason: 'user_not_found',
+            });
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
         const user = result.recordset[0];
 
         await Promise.all([reloadAdminEmails(), reloadMasterEmails(), reloadOverlordEmails()]);
@@ -1539,8 +1662,22 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         if (!user.password_hash)
             return res.status(401).json({ error: 'Your account has been created but you need to register first. Click "Create an account" to set your name and password.' });
         const valid = await verifyPassword(password, user.password_hash);
-        if (!valid) return res.status(401).json({ error: 'Invalid email or password' });
+        if (!valid) {
+            logSecurityEvent('auth_login_failed', {
+                ip: requestIp(req),
+                identity: securityIdentityFromRequest(req),
+                userId: user.id,
+                reason: 'invalid_password',
+            });
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
         if (!user.email_verified_at) {
+            logSecurityEvent('auth_login_denied', {
+                ip: requestIp(req),
+                identity: securityIdentityFromRequest(req),
+                userId: user.id,
+                reason: 'email_not_verified',
+            });
             return res.status(403).json({
                 code: 'EMAIL_NOT_VERIFIED',
                 email: user.email,
@@ -1552,6 +1689,12 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         res.json({ token, user: buildUserPublic(user), password_weak });
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
+        logSecurityEvent('auth_login_error', {
+            alert: true,
+            ip: requestIp(req),
+            identity: securityIdentityFromRequest(req),
+            reason: error.message,
+        }, 'error');
         console.error('Login error:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
