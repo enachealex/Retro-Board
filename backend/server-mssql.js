@@ -1087,6 +1087,17 @@ async function assertBoardAccessMssql(user, boardId) {
 async function assertBoardManagerMssql(user, boardId, message = 'Only board owners or admins can perform this action') {
     const board = await getBoardForAuthMssql(boardId);
     if (user.is_overlord || (user.is_master && sameDepartmentForBoard(user, board)) || user.is_admin || isBoardOwnerMssql(user, board)) return board;
+
+    // Legacy compatibility: some older boards may not have owner_user_id set.
+    // In that case, allow existing members to manage the board.
+    if (!board.owner_user_id) {
+        const memberResult = await pool.request()
+            .input('boardId', sql.Int, boardId)
+            .input('userId', sql.Int, user.id || user.sub)
+            .query('SELECT TOP 1 id FROM board_members WHERE board_id = @boardId AND user_id = @userId');
+        if (memberResult.recordset.length > 0) return board;
+    }
+
     const err = new Error(message);
     err.status = 403;
     throw err;

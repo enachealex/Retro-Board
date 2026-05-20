@@ -1366,6 +1366,17 @@ async function assertBoardManager(user, boardId, message = 'Only board owners or
     const board = await getBoardForAuth(boardId);
     if (user.is_master) return board;
     if (sameCompanyForBoard(user, board) && (user.is_admin || isBoardOwner(user, board))) return board;
+
+    // Legacy compatibility: some older boards may not have owner_user_id set.
+    // In that case, allow existing members to manage the board.
+    if (!board.owner_user_id) {
+        const [memberRows] = await pool.query(
+            'SELECT id FROM board_members WHERE board_id = ? AND user_id = ? LIMIT 1',
+            [boardId, user.id || user.sub]
+        );
+        if (memberRows.length > 0) return board;
+    }
+
     const err = new Error(message);
     err.status = 403;
     throw err;

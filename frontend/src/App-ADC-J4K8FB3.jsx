@@ -97,6 +97,9 @@ const App = () => {
     return true;
   };
 
+  const isBoardOwner = (board) => Number(board?.owner_user_id) === Number(user?.id);
+  const canManageBoard = (board) => !!board && (isAdmin || isSuperUser || isBoardOwner(board));
+
   const [boards, setBoards] = useState(() => {
     try {
       const stored = JSON.parse(localStorage.getItem("retro_boards")) || [];
@@ -116,6 +119,7 @@ const App = () => {
       return stored && isBoardAllowed(stored) ? stored : null;
     } catch { return null; }
   });
+  const canManageActiveBoard = canManageBoard(activeBoard);
   const [boardCache, setBoardCache] = useState(() => {
     try {
       const cachedUser = localStorage.getItem("retro_cache_owner");
@@ -1155,7 +1159,8 @@ const App = () => {
 
   const deleteBoard = async (boardId, e) => {
     e.stopPropagation();
-    if (!isAdmin && !isSuperUser) { alert("Only admins can delete boards."); return; }
+    const boardToDelete = boards.find((item) => Number(item.id) === Number(boardId)) || activeBoard;
+    if (!canManageBoard(boardToDelete)) { alert("Only board owners or admins can delete boards."); return; }
     showConfirm("Delete this board? This cannot be undone.", async () => {
       try {
         await axios.delete(`${API_URL}/boards/${boardId}`, authHeaders(token));
@@ -1240,6 +1245,10 @@ const App = () => {
   };
 
   const deleteColumn = async (colId) => {
+    if (!canManageActiveBoard) {
+      alert("Only board owners or admins can delete columns.");
+      return;
+    }
     const col = columns.find((c) => c.id === colId);
     const colName = col ? col.name : 'this column';
     const colCards = cards.filter((c) => c.column_id === colId);
@@ -1453,7 +1462,7 @@ const App = () => {
   };
 
   const deleteAllCardsInColumn = (colId) => {
-    if (!isAdmin && !isSuperUser) { alert("Only admins can clear a column."); return; }
+    if (!canManageActiveBoard) { alert("Only board owners or admins can clear a column."); return; }
     const colCards = cards.filter((c) => c.column_id === colId);
     setCards((prev) => prev.filter((c) => c.column_id !== colId));
     colCards.forEach(async (card) => {
@@ -2204,7 +2213,7 @@ const App = () => {
                 >
                   {isDarkTheme ? <Sun size={16} /> : <Moon size={16} />}
                 </button>
-                {sidebarPanel === "boards" && (isAdmin || isSuperUser) && (
+                {sidebarPanel === "boards" && (
                   <button
                     className="add-board-btn"
                     onClick={() => {
@@ -2263,7 +2272,7 @@ const App = () => {
                                 onClick={() => handleBoardClick(b)}
                                 onContextMenu={(e) => handleContextMenu(e, "board", b.id)}
                               >
-                                {(isAdmin || isSuperUser) && (
+                                {canManageBoard(b) && (
                                   <button className="delete-board-btn" onClick={(e) => deleteBoard(b.id, e)} title="Delete Board">
                                     <Trash2 size={14} />
                                   </button>
@@ -2565,7 +2574,7 @@ const App = () => {
                   <button onClick={() => { setAddingCardToColId(contextMenu.id); setContextMenu(null); }}>
                     <Plus size={14} /> Add Card
                   </button>
-                  {(isAdmin || isSuperUser) && (
+                  {canManageActiveBoard && (
                     <>
                       <hr className="context-menu-divider" />
                       <button onClick={() => { deleteAllCardsInColumn(contextMenu.id); setContextMenu(null); }}>
@@ -2688,18 +2697,18 @@ const App = () => {
               {contextMenu.type === "board" && (
                 <>
                   {(isAdmin || isSuperUser) && (
-                    <>
-                      <button onClick={() => {
-                        if (boards.length === 0) setIsModalOpen(true);
-                        else setIsCreatingBoardInline(true);
-                        setContextMenu(null);
-                      }}>
-                        <Plus size={14} /> Add New Board
-                      </button>
-                      <button onClick={() => { deleteBoard(contextMenu.id, { stopPropagation: () => {} }); setContextMenu(null); }}>
-                        <Trash2 size={14} /> Delete Board
-                      </button>
-                    </>
+                    <button onClick={() => {
+                      if (boards.length === 0) setIsModalOpen(true);
+                      else setIsCreatingBoardInline(true);
+                      setContextMenu(null);
+                    }}>
+                      <Plus size={14} /> Add New Board
+                    </button>
+                  )}
+                  {canManageBoard(boards.find(b => Number(b.id) === Number(contextMenu.id))) && (
+                    <button onClick={() => { deleteBoard(contextMenu.id, { stopPropagation: () => {} }); setContextMenu(null); }}>
+                      <Trash2 size={14} /> Delete Board
+                    </button>
                   )}
                 </>
               )}
@@ -2832,13 +2841,13 @@ const App = () => {
                     ) : (
                       <h1 className="board-title">
                         <span
-                          className={(isAdmin || isSuperUser) ? "board-title-text board-title-editable" : "board-title-text"}
-                          onClick={(isAdmin || isSuperUser) ? () => { setEditBoardName(activeBoard.name); setIsEditingBoard(true); } : undefined}
-                          title={(isAdmin || isSuperUser) ? "Click to edit board name" : undefined}
+                          className={canManageActiveBoard ? "board-title-text board-title-editable" : "board-title-text"}
+                          onClick={canManageActiveBoard ? () => { setEditBoardName(activeBoard.name); setIsEditingBoard(true); } : undefined}
+                          title={canManageActiveBoard ? "Click to edit board name" : undefined}
                         >
                           {activeBoard.name}
                         </span>
-                        {(isAdmin || isSuperUser) && (
+                        {canManageActiveBoard && (
                           <button
                             className="edit-board-btn"
                             onClick={() => {
@@ -2853,7 +2862,7 @@ const App = () => {
                       </h1>
                     )}
                   </div>
-                  {(isAdmin || isSuperUser) && (
+                  {canManageActiveBoard && (
                     <button
                       className="bg-picker-btn"
                       title="Change background"
@@ -2863,7 +2872,7 @@ const App = () => {
                     </button>
                   )}
                   <div className="add-column">
-                    {(isAdmin || isSuperUser) && isAddingColumn ? (
+                    {canManageActiveBoard && isAddingColumn ? (
                       <>
                         <input
                           autoFocus
@@ -2897,14 +2906,14 @@ const App = () => {
                           Save
                         </button>
                       </>
-                    ) : (isAdmin || isSuperUser) ? (
+                    ) : canManageActiveBoard ? (
                       <button onClick={() => setIsAddingColumn(true)}>
                         Add Column
                       </button>
                     ) : null}
                   </div>
                   <div className="board-users-dropdown-wrapper">
-                    {(isAdmin || isSuperUser) && (
+                    {canManageActiveBoard && (
                       <button
                         className="board-users-btn"
                         title="Manage board members"
@@ -3017,7 +3026,7 @@ const App = () => {
                             key={col.id}
                             draggableId={`col-${col.id}`}
                             index={index}
-                            isDragDisabled={!isAdmin && !isSuperUser}
+                            isDragDisabled={!canManageActiveBoard}
                           >
                             {(provided) => (
                               <div
@@ -3035,7 +3044,7 @@ const App = () => {
                                   onContextMenu={(e) => handleContextMenu(e, "column", col.id)}
                                 >
                                   <div className="column-header-actions">
-                                    {(isAdmin || isSuperUser) && hoveredColumnId === col.id && (
+                                    {canManageActiveBoard && hoveredColumnId === col.id && (
                                       <button
                                         className="delete-column-btn"
                                         onClick={() => deleteColumn(col.id)}
@@ -3045,7 +3054,7 @@ const App = () => {
                                       </button>
                                     )}
                                   </div>
-                                  {(isAdmin || isSuperUser) && editingColumnId === col.id ? (
+                                  {canManageActiveBoard && editingColumnId === col.id ? (
                                     <input
                                       autoFocus
                                       className="edit-column-input"
@@ -3065,7 +3074,7 @@ const App = () => {
                                     <h3
                                       className="column-title"
                                       onClick={() => {
-                                        if (!(isAdmin || isSuperUser)) return;
+                                        if (!canManageActiveBoard) return;
                                         setEditingColumnId(col.id);
                                         setEditColumnName(col.name);
                                       }}
