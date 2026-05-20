@@ -2306,39 +2306,89 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
         // Prevent demoting yourself
         if (Number.parseInt(userId, 10) === req.user.sub) return res.status(400).json({ error: 'You cannot change your own master status' });
         const val = is_master ? 1 : 0;
+        const connection = await pool.getConnection();
+        let userEmail = '';
         try {
-            const [userRows] = await pool.query('SELECT email FROM users WHERE id = ?', [userId]);
-            if (userRows.length === 0) return res.status(404).json({ error: 'User not found' });
-            const userEmail = (userRows[0].email || '').trim().toLowerCase();
-            console.log(`[master-toggle] start userId=${userId} email=${userEmail} val=${val} caller=${req.user.email}`);
-            // Promoting to master also clears is_admin; demoting leaves is_admin as-is
-            if (val === 1) {
-                await pool.query('UPDATE users SET is_master = 1, is_admin = 0 WHERE id = ?', [userId]);
-                await pool.query('INSERT IGNORE INTO master_emails (email) VALUES (?)', [userEmail]);
-                await pool.query('DELETE FROM admin_emails WHERE LOWER(email) = ?', [userEmail]);
-            } else {
-                await pool.query('UPDATE users SET is_master = 0 WHERE id = ?', [userId]);
-                await pool.query('DELETE FROM master_emails WHERE LOWER(email) = ?', [userEmail]);
+            const [userRows] = await connection.query('SELECT email FROM users WHERE id = ?', [userId]);
+            if (userRows.length === 0) {
+                connection.release();
+                return res.status(404).json({ error: 'User not found' });
             }
+            userEmail = (userRows[0].email || '').trim().toLowerCase();
+            if (!userEmail) {
+                connection.release();
+                return res.status(400).json({ error: 'User has no email on record' });
+            }
+            console.log(`[master-toggle] start userId=${userId} email=${userEmail} val=${val} caller=${req.user.email}`);
+
+            await connection.beginTransaction();
+            if (val === 1) {
+                // 1. Set users.is_master = 1, is_admin = 0
+                const [u1] = await connection.query('UPDATE users SET is_master = 1, is_admin = 0 WHERE id = ?', [userId]);
+                if (!u1 || u1.affectedRows === 0) throw new Error(`users.is_master update affected 0 rows for userId=${userId}`);
+                // 2. Ensure master_emails has a row for this email (explicit, NOT silent-ignore)
+                const [meExists] = await connection.query('SELECT id FROM master_emails WHERE LOWER(email) = ?', [userEmail]);
+                if (meExists.length === 0) {
+                    const [meIns] = await connection.query('INSERT INTO master_emails (email) VALUES (?)', [userEmail]);
+                    if (!meIns || !meIns.insertId) throw new Error(`master_emails INSERT returned no insertId for email=${userEmail}`);
+                }
+                // 3. Drop from admin_emails so login reconciliation can't downgrade them
+                await connection.query('DELETE FROM admin_emails WHERE LOWER(email) = ?', [userEmail]);
+            } else {
+                const [u1] = await connection.query('UPDATE users SET is_master = 0 WHERE id = ?', [userId]);
+                if (!u1 || u1.affectedRows === 0) throw new Error(`users.is_master update affected 0 rows for userId=${userId}`);
+                await connection.query('DELETE FROM master_emails WHERE LOWER(email) = ?', [userEmail]);
+            }
+            await connection.commit();
+            connection.release();
+
+            // Reload in-memory caches FROM THE POOL (separate connection) — proves the write is visible to other connections.
             await Promise.all([reloadMasterEmails(), reloadAdminEmails()]);
 
+            // Independent verification via the pool, not the transaction connection.
             const [verifyRows] = await pool.query(
                 `SELECT u.is_master AS user_master,
                         (SELECT COUNT(*) FROM master_emails WHERE LOWER(email) = ?) AS in_master_table,
-                        (SELECT COUNT(*) FROM admin_emails  WHERE LOWER(email) = ?) AS in_admin_table
+                        (SELECT COUNT(*) FROM admin_emails  WHERE LOWER(email) = ?) AS in_admin_table,
+                        (SELECT id FROM master_emails WHERE LOWER(email) = ? LIMIT 1) AS master_row_id
                  FROM users u WHERE u.id = ?`,
-                [userEmail, userEmail, userId]
+                [userEmail, userEmail, userEmail, userId]
             );
             const v = verifyRows[0] || {};
             const inMemory = MASTER_EMAILS.includes(userEmail) ? 1 : 0;
-            console.log(`[master-toggle] verify userId=${userId} email=${userEmail} target=${val} users.is_master=${v.user_master} master_emails=${v.in_master_table} admin_emails=${v.in_admin_table} inMemory=${inMemory}`);
-            if (val === 1 && (!(v.user_master === 1 || v.user_master === true) || Number(v.in_master_table) === 0 || inMemory === 0)) {
-                console.error('[master-toggle] PROMOTION VERIFICATION FAILED', { userId, email: userEmail, verify: v, inMemory });
-                return res.status(500).json({ error: 'Master promotion did not persist. Check server logs.' });
+            console.log(`[master-toggle] verify userId=${userId} email=${userEmail} target=${val} users.is_master=${v.user_master} master_emails=${v.in_master_table} admin_emails=${v.in_admin_table} inMemory=${inMemory} master_row_id=${v.master_row_id}`);
+
+            if (val === 1) {
+                const userMasterOk = v.user_master === 1 || v.user_master === true;
+                const tableOk = Number(v.in_master_table) > 0;
+                if (!userMasterOk || !tableOk || inMemory === 0) {
+                    console.error('[master-toggle] PROMOTION VERIFICATION FAILED', { userId, email: userEmail, verify: v, inMemory });
+                    return res.status(500).json({
+                        error: 'Master promotion did not persist after commit.',
+                        diagnostic: { email: userEmail, users_is_master: v.user_master, in_master_table: Number(v.in_master_table), in_admin_table: Number(v.in_admin_table), in_memory: !!inMemory, master_row_id: v.master_row_id ?? null },
+                    });
+                }
+            } else {
+                const userMasterOk = v.user_master === 0 || v.user_master === false;
+                const tableOk = Number(v.in_master_table) === 0;
+                if (!userMasterOk || !tableOk) {
+                    console.error('[master-toggle] DEMOTION VERIFICATION FAILED', { userId, email: userEmail, verify: v, inMemory });
+                    return res.status(500).json({
+                        error: 'Master demotion did not persist after commit.',
+                        diagnostic: { email: userEmail, users_is_master: v.user_master, in_master_table: Number(v.in_master_table) },
+                    });
+                }
             }
-            res.json({ success: true, is_master: val === 1, email: userEmail });
+            res.json({
+                success: true,
+                is_master: val === 1,
+                email: userEmail,
+                diagnostic: { users_is_master: v.user_master, in_master_table: Number(v.in_master_table), in_admin_table: Number(v.in_admin_table), in_memory: !!inMemory, master_row_id: v.master_row_id ?? null },
+            });
         } catch (error) {
-            console.error('[master-toggle] error', error);
+            try { await connection.rollback(); } catch { /* noop */ }
+            try { connection.release(); } catch { /* noop */ }
+            console.error('[master-toggle] error', { userId, email: userEmail, message: error.message, stack: error.stack });
             res.status(500).json({ error: error.message });
         }
         return;

@@ -3194,10 +3194,14 @@ const App = () => {
                           newVal ? `Promote ${u.display_name || u.username} to Master?` : `Demote ${u.display_name || u.username} from Master?`,
                           async () => {
                             try {
-                              await axios.patch(`${API_URL}/users/${userId}`, { is_master: newVal }, authHeaders(token));
+                              const resp = await axios.patch(`${API_URL}/users/${userId}`, { is_master: newVal }, authHeaders(token));
+                              console.log('[master-toggle] response', resp.data);
                               setUsersList(prev => prev.map(x => Number(x.id) === Number(userId) ? { ...x, is_master: newVal, is_admin: newVal ? 0 : x.is_admin } : x));
                               await Promise.all([fetchUsers(), fetchLeads(), fetchMasterEmails()]);
-                            } catch(e) { console.error(e); }
+                            } catch(e) {
+                              console.error('[master-toggle] failed', e?.response?.data || e);
+                              alert(`Master ${newVal ? 'promotion' : 'demotion'} failed: ${e?.response?.data?.error || e.message}`);
+                            }
                           }
                         );
                       }}>

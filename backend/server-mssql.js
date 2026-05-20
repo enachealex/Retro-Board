@@ -1982,59 +1982,105 @@ app.patch('/api/users/:userId', authMiddleware, async (req, res) => {
     if (is_master !== undefined && department === undefined && is_admin === undefined) {
         if (Number.parseInt(userId, 10) === req.user.sub) return res.status(400).json({ error: 'You cannot change your own master status' });
         const val = is_master ? 1 : 0;
+        let userEmail = '';
+        let safeDept = null;
+        const transaction = new sql.Transaction(pool);
+        let txnStarted = false;
         try {
             const userResult = await pool.request()
                 .input('id', sql.Int, userId)
                 .query('SELECT email, department FROM users WHERE id = @id');
             if (userResult.recordset.length === 0) return res.status(404).json({ error: 'User not found' });
             const rawEmail = userResult.recordset[0].email || '';
-            const userEmail = rawEmail.trim().toLowerCase();
+            userEmail = rawEmail.trim().toLowerCase();
+            if (!userEmail) return res.status(400).json({ error: 'User has no email on record' });
             const rawDept = userResult.recordset[0].department;
             // master_emails has CHECK (department IN ('QA','SE','SDET') OR NULL).
-            // Use NULL when the user's department isn't one of the allowed values so the INSERT can't fail.
-            const safeDept = (rawDept && ['QA', 'SE', 'SDET'].includes(rawDept)) ? rawDept : null;
+            safeDept = (rawDept && ['QA', 'SE', 'SDET'].includes(rawDept)) ? rawDept : null;
             console.log(`[master-toggle] start userId=${userId} email=${userEmail} val=${val} caller=${req.user.email}`);
 
+            await transaction.begin();
+            txnStarted = true;
+
             if (val === 1) {
-                // 1. Promote the user record
-                await pool.request().input('id', sql.Int, userId).query('UPDATE users SET is_master = 1, is_admin = 0 WHERE id = @id');
-                // 2. Ensure master_emails has this email (case-insensitive check, lowercase stored)
-                await pool.request()
+                const u1 = await new sql.Request(transaction)
+                    .input('id', sql.Int, userId)
+                    .query('UPDATE users SET is_master = 1, is_admin = 0 WHERE id = @id');
+                if (!u1.rowsAffected || u1.rowsAffected[0] === 0) throw new Error(`users.is_master update affected 0 rows for userId=${userId}`);
+
+                const existing = await new sql.Request(transaction)
                     .input('email', sql.NVarChar(255), userEmail)
-                    .input('dept', sql.NVarChar(10), safeDept)
-                    .query(`IF NOT EXISTS (SELECT 1 FROM master_emails WHERE LOWER(email) = @email)
-                            INSERT INTO master_emails (email, department) VALUES (@email, @dept)`);
-                // 3. Drop them from admin_emails so login reconciliation can't downgrade them
-                await pool.request().input('email', sql.NVarChar(255), userEmail).query('DELETE FROM admin_emails WHERE LOWER(email) = @email');
+                    .query('SELECT id FROM master_emails WHERE LOWER(email) = @email');
+                if (existing.recordset.length === 0) {
+                    const ins = await new sql.Request(transaction)
+                        .input('email', sql.NVarChar(255), userEmail)
+                        .input('dept', sql.NVarChar(10), safeDept)
+                        .query('INSERT INTO master_emails (email, department) OUTPUT INSERTED.id VALUES (@email, @dept)');
+                    if (!ins.recordset[0] || !ins.recordset[0].id) throw new Error(`master_emails INSERT returned no id for email=${userEmail}`);
+                }
+
+                await new sql.Request(transaction)
+                    .input('email', sql.NVarChar(255), userEmail)
+                    .query('DELETE FROM admin_emails WHERE LOWER(email) = @email');
             } else {
-                await pool.request().input('id', sql.Int, userId).query('UPDATE users SET is_master = 0 WHERE id = @id');
-                await pool.request()
+                const u1 = await new sql.Request(transaction)
+                    .input('id', sql.Int, userId)
+                    .query('UPDATE users SET is_master = 0 WHERE id = @id');
+                if (!u1.rowsAffected || u1.rowsAffected[0] === 0) throw new Error(`users.is_master update affected 0 rows for userId=${userId}`);
+                await new sql.Request(transaction)
                     .input('email', sql.NVarChar(255), userEmail)
                     .query('DELETE FROM master_emails WHERE LOWER(email) = @email');
             }
 
+            await transaction.commit();
+            txnStarted = false;
+
             await Promise.all([reloadMasterEmails(), reloadAdminEmails()]);
 
-            // Verify the writes actually persisted. If verification fails, surface a 500 instead of a false success.
+            // Independent verification via the pool (separate from the transaction connection).
             const verify = await pool.request()
                 .input('id', sql.Int, userId)
                 .input('email', sql.NVarChar(255), userEmail)
                 .query(`SELECT u.is_master AS user_master,
                                (SELECT COUNT(*) FROM master_emails WHERE LOWER(email) = @email) AS in_master_table,
-                               (SELECT COUNT(*) FROM admin_emails  WHERE LOWER(email) = @email) AS in_admin_table
+                               (SELECT COUNT(*) FROM admin_emails  WHERE LOWER(email) = @email) AS in_admin_table,
+                               (SELECT TOP 1 id FROM master_emails WHERE LOWER(email) = @email) AS master_row_id
                         FROM users u WHERE u.id = @id`);
             const v = verify.recordset[0] || {};
             const inMemory = MASTER_EMAILS.includes(userEmail) ? 1 : 0;
-            console.log(`[master-toggle] verify userId=${userId} email=${userEmail} target=${val} users.is_master=${v.user_master} master_emails=${v.in_master_table} admin_emails=${v.in_admin_table} inMemory=${inMemory}`);
+            console.log(`[master-toggle] verify userId=${userId} email=${userEmail} target=${val} users.is_master=${v.user_master} master_emails=${v.in_master_table} admin_emails=${v.in_admin_table} inMemory=${inMemory} master_row_id=${v.master_row_id}`);
 
-            if (val === 1 && (!(v.user_master === 1 || v.user_master === true) || Number(v.in_master_table) === 0 || inMemory === 0)) {
-                console.error('[master-toggle] PROMOTION VERIFICATION FAILED', { userId, email: userEmail, verify: v, inMemory });
-                return res.status(500).json({ error: 'Master promotion did not persist. Check server logs.' });
+            if (val === 1) {
+                const userMasterOk = v.user_master === 1 || v.user_master === true;
+                const tableOk = Number(v.in_master_table) > 0;
+                if (!userMasterOk || !tableOk || inMemory === 0) {
+                    console.error('[master-toggle] PROMOTION VERIFICATION FAILED', { userId, email: userEmail, verify: v, inMemory });
+                    return res.status(500).json({
+                        error: 'Master promotion did not persist after commit.',
+                        diagnostic: { email: userEmail, users_is_master: v.user_master, in_master_table: Number(v.in_master_table), in_admin_table: Number(v.in_admin_table), in_memory: !!inMemory, master_row_id: v.master_row_id ?? null },
+                    });
+                }
+            } else {
+                const userMasterOk = v.user_master === 0 || v.user_master === false;
+                const tableOk = Number(v.in_master_table) === 0;
+                if (!userMasterOk || !tableOk) {
+                    console.error('[master-toggle] DEMOTION VERIFICATION FAILED', { userId, email: userEmail, verify: v, inMemory });
+                    return res.status(500).json({
+                        error: 'Master demotion did not persist after commit.',
+                        diagnostic: { email: userEmail, users_is_master: v.user_master, in_master_table: Number(v.in_master_table) },
+                    });
+                }
             }
 
-            res.json({ success: true, is_master: val === 1, email: userEmail });
+            res.json({
+                success: true,
+                is_master: val === 1,
+                email: userEmail,
+                diagnostic: { users_is_master: v.user_master, in_master_table: Number(v.in_master_table), in_admin_table: Number(v.in_admin_table), in_memory: !!inMemory, master_row_id: v.master_row_id ?? null },
+            });
         } catch (error) {
-            console.error('[master-toggle] error', error);
+            if (txnStarted) { try { await transaction.rollback(); } catch { /* noop */ } }
+            console.error('[master-toggle] error', { userId, email: userEmail, message: error.message, stack: error.stack });
             res.status(500).json({ error: error.message });
         }
         return;
