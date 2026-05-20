@@ -3,16 +3,27 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 const REQUIRED_STREAK = 5;
 const CUE_MS = 900;
 const RESULT_MS = 520;
-const PADS = ["A", "B", "C"];
+const PADS = ["A", "B", "C", "D"];
 
-function randomPad(exclude = -1) {
-  const values = new Uint32Array(1);
-  let next = exclude;
-  while (next === exclude) {
+function randomInt(max) {
+  if (globalThis.crypto?.getRandomValues) {
+    const values = new Uint32Array(1);
     globalThis.crypto.getRandomValues(values);
-    next = values[0] % PADS.length;
+    return values[0] % max;
   }
-  return next;
+  return Math.floor(Math.random() * max);
+}
+
+function createRandomPadPool(lastPad = -1) {
+  const pool = Array.from({ length: PADS.length }, (_, index) => index);
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = randomInt(i + 1);
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  if (pool[0] === lastPad && pool.length > 1) {
+    [pool[0], pool[1]] = [pool[1], pool[0]];
+  }
+  return pool;
 }
 
 function createChallengeId() {
@@ -25,10 +36,11 @@ function createChallengeId() {
 export default function CaptchaChallenge({ value, onChange, disabled, reloadKey = 0 }) {
   const [challengeId, setChallengeId] = useState(() => createChallengeId());
   const [startedAt, setStartedAt] = useState(() => Date.now());
-  const [safePad, setSafePad] = useState(() => randomPad());
+  const [safePad, setSafePad] = useState(() => randomInt(PADS.length));
   const [selectedPad, setSelectedPad] = useState(null);
   const [streak, setStreak] = useState(0);
   const [status, setStatus] = useState("watch");
+  const padPoolRef = useRef(createRandomPadPool());
   const timerRef = useRef(null);
 
   const clearTimer = useCallback(() => {
@@ -42,10 +54,17 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
     onChange({ type: "landing-pads", token: "", answer: "", rounds: 0 });
   }, [onChange]);
 
+  const nextSafePad = useCallback((previousSafePad = -1) => {
+    if (!padPoolRef.current.length) {
+      padPoolRef.current = createRandomPadPool(previousSafePad);
+    }
+    return padPoolRef.current.shift();
+  }, []);
+
   const startRound = useCallback((nextStreak = 0, previousSafePad = -1) => {
     clearTimer();
     setSelectedPad(null);
-    setSafePad(randomPad(previousSafePad));
+    setSafePad(nextSafePad(previousSafePad));
     setStreak(nextStreak);
     setStatus("watch");
     clearProof();
@@ -53,12 +72,13 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
       setStatus("ready");
       timerRef.current = null;
     }, CUE_MS);
-  }, [clearProof, clearTimer]);
+  }, [clearProof, clearTimer, nextSafePad]);
 
   const resetChallenge = useCallback(() => {
     clearTimer();
     setChallengeId(createChallengeId());
     setStartedAt(Date.now());
+    padPoolRef.current = createRandomPadPool();
     startRound(0);
   }, [clearTimer, startRound]);
 
@@ -101,25 +121,25 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
 
   const complete = value?.type === "landing-pads" && value?.answer === "complete" && Number(value?.rounds || 0) >= REQUIRED_STREAK;
   const prompt = status === "watch"
-    ? "Watch the lit pad."
+    ? "Observe which option lights up."
     : status === "ready"
-      ? "Pick the safe pad."
+      ? "Select the highlighted option."
       : status === "hit"
-        ? "Landing locked."
+        ? "Verified."
         : status === "miss"
-          ? "Missed approach. Streak reset."
-          : "Security check complete.";
+          ? "Incorrect selection. Progress reset."
+          : "CAPTCHA verification complete.";
 
   return (
     <div className="auth-field auth-landing-pads-field">
       <div className="auth-landing-pads-header">
-        <span className="auth-landing-kicker">Landing Pads</span>
+        <span className="auth-landing-kicker">CAPTCHA Verification</span>
         <span className="auth-landing-count">{Math.min(streak, REQUIRED_STREAK)} / {REQUIRED_STREAK}</span>
       </div>
       <div className="auth-landing-pads-panel" aria-live="polite">
-        <p className="auth-landing-title">Pick the safe pad.</p>
+        <p className="auth-landing-title">Select the highlighted option.</p>
         <p className="auth-landing-prompt">{prompt}</p>
-        <div className="auth-landing-pads-grid">
+        <div className="auth-landing-pads-grid" aria-label="CAPTCHA options">
           {PADS.map((pad, index) => {
             const isCue = status === "watch" && index === safePad;
             const isSelected = selectedPad === index;
@@ -137,13 +157,14 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
                 ].filter(Boolean).join(" ")}
                 onClick={() => handlePadClick(index)}
                 disabled={disabled || status !== "ready" || complete}
+                aria-label={`CAPTCHA option ${index + 1}`}
               >
-                Pad {pad}
+                Option {index + 1}
               </button>
             );
           })}
         </div>
-        <div className="auth-landing-streak">Current streak: {Math.min(streak, REQUIRED_STREAK)}</div>
+        <div className="auth-landing-streak">Verification progress: {Math.min(streak, REQUIRED_STREAK)} of {REQUIRED_STREAK}</div>
       </div>
     </div>
   );

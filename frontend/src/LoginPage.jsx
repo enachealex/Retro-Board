@@ -222,8 +222,10 @@ export default function LoginPage({ onGoToRegister }) {
       const cleanUrl = qs ? `${globalThis.location.pathname}?${qs}` : globalThis.location.pathname;
       globalThis.history.replaceState({}, '', cleanUrl);
       setResetToken("");
-      setPassword(resetPassword);
-      setForgotMessage("Password reset successful. You can now sign in.");
+      setResetPassword("");
+      setResetConfirm("");
+      setPassword("");
+      setForgotMessage("Password reset successful. Please sign in with your new password.");
     } catch (err) {
       setResetError(err.response?.data?.error || "Failed to reset password.");
     } finally {
@@ -443,8 +445,8 @@ export default function LoginPage({ onGoToRegister }) {
             />
             <span className="auth-logo-text">Vault Jump Retro</span>
           </div>
-          <h2 className="auth-title">Security Check</h2>
-          <p className="auth-subtitle">Complete the check to sign in.</p>
+          <h2 className="auth-title">CAPTCHA Verification</h2>
+          <p className="auth-subtitle">Complete the CAPTCHA security check to sign in.</p>
 
           <form className="auth-form" onSubmit={handleSecuritySubmit}>
             {authError && (

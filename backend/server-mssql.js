@@ -46,7 +46,7 @@ async function sendWelcomeEmail(firstName, email) {
         await emailTransporter.sendMail({
             from: EMAIL_FROM,
             to: email,
-            subject: 'Welcome to RetroBoard!',
+            subject: 'Welcome to Vault Jump Retro!',
             html: `
 <!DOCTYPE html>
 <html>
@@ -55,16 +55,16 @@ async function sendWelcomeEmail(firstName, email) {
   <tr><td align="center">
     <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
       <tr><td style="background:#001489;padding:28px 36px;">
-        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; RetroBoard</span>
+        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
       </td></tr>
       <tr><td style="padding:36px;">
         <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Welcome, ${safeFirstName}!</h1>
-        <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 20px;">Your account has been created. You can now sign in and access your team's retrospective boards.</p>
+        <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 20px;">Your account has been created. You can now sign in and access your team's retro boards.</p>
         <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 28px;">Sign in with your email address: <strong>${safeEmail}</strong></p>
         <p style="color:#888;font-size:13px;margin:0;">If you didn't create this account, please contact your team administrator.</p>
       </td></tr>
       <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span>
+                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span>
       </td></tr>
     </table>
   </td></tr>
@@ -103,7 +103,7 @@ async function sendEmailVerificationEmail(firstName, email, verificationUrl, exp
                 <p style="color:#001489;font-size:12px;line-height:1.5;word-break:break-all;margin:0 0 22px;">${safeUrl}</p>
                 <p style="color:#888;font-size:13px;margin:0;">If you did not create this account, you can ignore this email.</p>
             </td></tr>
-            <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;"><span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span></td></tr>
+            <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;"><span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span></td></tr>
         </table>
     </td></tr>
 </table>
@@ -118,7 +118,7 @@ async function sendPasswordResetEmail(email, resetUrl) {
         await emailTransporter.sendMail({
         from: EMAIL_FROM,
         to: email,
-        subject: 'Reset your RetroBoard password',
+        subject: 'Reset your Vault Jump Retro password',
         html: `
 <!DOCTYPE html>
 <html>
@@ -136,7 +136,7 @@ async function sendPasswordResetEmail(email, resetUrl) {
                 <p style="color:#001489;font-size:12px;line-height:1.5;word-break:break-all;margin:0 0 22px;">${safeUrl}</p>
                 <p style="color:#888;font-size:13px;margin:0;">If you did not request this, you can ignore this email.</p>
             </td></tr>
-            <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;"><span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span></td></tr>
+            <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;"><span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span></td></tr>
         </table>
     </td></tr>
 </table>
