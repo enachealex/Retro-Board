@@ -2502,7 +2502,7 @@ const App = () => {
                     >
                       <Plus size={18} />
                       <span>Blank</span>
-                      <small>3 default columns</small>
+                      <small>0 default columns</small>
                     </button>
                     <button
                       className="board-template-btn"

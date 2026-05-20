@@ -2045,7 +2045,7 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
         const insertId = insertResult.recordset[0].id;
         const defaultColumns = template === 'template'
             ? [['Ice Breaker', 0], ['Needs Improvements', 1], ['Went Well', 2], ['Action Items', 3]]
-            : [['Went Well', 0], ['To Improve', 1], ['Action Items', 2]];
+            : [];
         for (const [colName, pos] of defaultColumns) {
             await pool.request()
                 .input('boardId', sql.Int, insertId)

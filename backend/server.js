@@ -2402,12 +2402,8 @@ app.post('/api/boards', authMiddleware, async (req, res) => {
                 ['Needs Improvements', 1],
                 ['Went Well', 2],
                 ['Action Items', 3],
-              ]
-            : [
-                ['Went Well', 0],
-                ['To Improve', 1],
-                ['Action Items', 2],
-              ];
+                            ]
+                        : [];
         for (const [colName, pos] of defaultColumns) {
             await pool.query('INSERT INTO `columns` (board_id, name, position) VALUES (?, ?, ?)', [insertId, colName, pos]);
         }
