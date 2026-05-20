@@ -703,6 +703,44 @@ if (httpsServer) {
     io.attach(httpsServer, { cors: corsOptions });
 }
 
+function getSocketToken(socket) {
+    const authToken = socket?.handshake?.auth?.token;
+    if (typeof authToken === 'string' && authToken.trim()) {
+        return authToken.startsWith('Bearer ') ? authToken.slice(7) : authToken;
+    }
+
+    const authHeader = socket?.handshake?.headers?.authorization;
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        return authHeader.slice(7);
+    }
+    return null;
+}
+
+io.use(async (socket, next) => {
+    try {
+        const token = getSocketToken(socket);
+        if (!token) return next(new Error('Unauthorized'));
+
+        const payload = verifyJwt(token);
+        if (!payload) return next(new Error('Unauthorized'));
+
+        const currentUser = await getCurrentUserForAuth(payload.sub);
+        if (!currentUser || !currentUser.email_verified_at) {
+            return next(new Error('Unauthorized'));
+        }
+
+        socket.user = {
+            ...payload,
+            ...buildUserPublic(currentUser),
+            sub: currentUser.id,
+            id: currentUser.id,
+        };
+        next();
+    } catch {
+        next(new Error('Unauthorized'));
+    }
+});
+
 app.use(cors(corsOptions));
 app.use(helmet({
     contentSecurityPolicy: {
@@ -1398,23 +1436,38 @@ const userSockets = new Map(); // userId -> Set<socketId>
 io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
 
-    // Register user socket mapping when client identifies itself
-    socket.on('register:user', (userId) => {
-        try {
-            if (!userId) return;
+    try {
+        const userId = socket.user?.id || socket.user?.sub;
+        if (userId) {
             socket.userId = userId;
             if (!userSockets.has(userId)) userSockets.set(userId, new Set());
             userSockets.get(userId).add(socket.id);
+        }
+    } catch (err) {
+        console.error('socket initial registration error:', err.message);
+    }
+
+    // Register user socket mapping when client identifies itself
+    socket.on('register:user', (userId) => {
+        try {
+            if (!socket.userId || Number(userId) !== Number(socket.userId)) {
+                socket.emit('socket:error', { error: 'User registration mismatch' });
+            }
         } catch (err) {
             console.error('socket register:user error:', err.message);
         }
     });
 
     // Room-based subscriptions: clients join only the board they are viewing
-    socket.on('join:board', (boardId) => {
+    socket.on('join:board', async (boardId) => {
         try {
+            await assertBoardAccess(socket.user, boardId);
             socket.join(`board:${boardId}`);
         } catch (err) {
+            if (err?.status === 403 || err?.status === 404) {
+                socket.emit('socket:error', { error: 'Access denied' });
+                return;
+            }
             console.error('socket join:board error:', err.message);
         }
     });

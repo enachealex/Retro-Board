@@ -9,6 +9,7 @@ const jwt = require('jsonwebtoken');
 const sql = process.env.DB_DRIVER === 'msnodesqlv8' ? require('mssql/msnodesqlv8') : require('mssql');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
@@ -661,9 +662,73 @@ if (httpsServer) {
     io.attach(httpsServer, { cors: corsOptions });
 }
 
+function getSocketToken(socket) {
+    const authToken = socket?.handshake?.auth?.token;
+    if (typeof authToken === 'string' && authToken.trim()) {
+        return authToken.startsWith('Bearer ') ? authToken.slice(7) : authToken;
+    }
+
+    const authHeader = socket?.handshake?.headers?.authorization;
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+        return authHeader.slice(7);
+    }
+    return null;
+}
+
+io.use(async (socket, next) => {
+    try {
+        const token = getSocketToken(socket);
+        if (!token) return next(new Error('Unauthorized'));
+
+        const payload = verifyJwt(token);
+        if (!payload) return next(new Error('Unauthorized'));
+
+        const currentUser = await getCurrentUserForAuth(payload.sub);
+        if (!currentUser || !currentUser.email_verified_at) {
+            return next(new Error('Unauthorized'));
+        }
+
+        socket.user = {
+            ...payload,
+            ...buildUserPublic(currentUser),
+            sub: currentUser.id,
+            id: currentUser.id,
+        };
+        next();
+    } catch {
+        next(new Error('Unauthorized'));
+    }
+});
+
 app.use(cors(corsOptions));
 app.use(compression());
 app.use(express.json());
+
+// --- Rate Limiters ---
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 15,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many attempts, please try again later' },
+});
+
+const registerLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many accounts created, please try again later' },
+});
+
+const passwordLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many password change attempts, please try again later' },
+});
+
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
     maxAge: '7d',
     etag: true,
@@ -1108,13 +1173,31 @@ const userSockets = new Map();
 
 io.on('connection', (socket) => {
     console.log(`Client connected: ${socket.id}`);
-    socket.on('register:user', (userId) => {
-        if (!userId) return;
+
+    const userId = socket.user?.id || socket.user?.sub;
+    if (userId) {
         socket.userId = userId;
         if (!userSockets.has(userId)) userSockets.set(userId, new Set());
         userSockets.get(userId).add(socket.id);
+    }
+
+    socket.on('register:user', (userId) => {
+        if (!socket.userId || Number(userId) !== Number(socket.userId)) {
+            socket.emit('socket:error', { error: 'User registration mismatch' });
+        }
     });
-    socket.on('join:board', (boardId) => { socket.join(`board:${boardId}`); });
+    socket.on('join:board', async (boardId) => {
+        try {
+            await assertBoardAccessMssql(socket.user, boardId);
+            socket.join(`board:${boardId}`);
+        } catch (err) {
+            if (err?.status === 403 || err?.status === 404) {
+                socket.emit('socket:error', { error: 'Access denied' });
+                return;
+            }
+            console.error('socket join:board error:', err.message);
+        }
+    });
     socket.on('leave:board', (boardId) => { socket.leave(`board:${boardId}`); });
     socket.on('disconnect', () => {
         console.log(`Client disconnected: ${socket.id}`);
@@ -1190,7 +1273,7 @@ app.get('/api/auth/captcha', (req, res) => {
     res.json(createCaptchaChallenge());
 });
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', registerLimiter, async (req, res) => {
     const { firstName, lastName, email, password, department, lead, role, captcha } = req.body;
     const emailLower = (email || '').toLowerCase();
     const isMasterEmail = MASTER_EMAILS.includes(emailLower);
@@ -1421,7 +1504,7 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password, captcha } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
     try {
@@ -1474,7 +1557,7 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-app.post('/api/auth/verify-email', async (req, res) => {
+app.post('/api/auth/verify-email', authLimiter, async (req, res) => {
     const token = String(req.body?.token || '').trim();
     if (!token) return res.status(400).json({ error: 'Verification token is required' });
 
@@ -1503,7 +1586,7 @@ app.post('/api/auth/verify-email', async (req, res) => {
     }
 });
 
-app.post('/api/auth/resend-verification', async (req, res) => {
+app.post('/api/auth/resend-verification', authLimiter, async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const verificationFallbackKey = String(req.get('x-verify-fallback-key') || '');
     if (!email) return res.status(400).json({ error: 'email is required' });
@@ -1532,7 +1615,7 @@ app.post('/api/auth/resend-verification', async (req, res) => {
     }
 });
 
-app.post('/api/auth/request-password-reset', async (req, res) => {
+app.post('/api/auth/request-password-reset', authLimiter, async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     if (!email) return res.status(400).json({ error: 'email is required' });
 
@@ -1563,7 +1646,7 @@ app.post('/api/auth/request-password-reset', async (req, res) => {
     }
 });
 
-app.post('/api/auth/reset-password', async (req, res) => {
+app.post('/api/auth/reset-password', passwordLimiter, async (req, res) => {
     const token = String(req.body?.token || '').trim();
     const newPassword = String(req.body?.newPassword || '');
     if (!token || !newPassword) return res.status(400).json({ error: 'token and newPassword are required' });
@@ -1617,7 +1700,7 @@ app.patch('/api/auth/profile', authMiddleware, async (req, res) => {
     }
 });
 
-app.patch('/api/auth/password', authMiddleware, async (req, res) => {
+app.patch('/api/auth/password', authMiddleware, passwordLimiter, async (req, res) => {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password are required' });
     if (typeof newPassword !== 'string' || newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
@@ -1679,11 +1762,22 @@ app.get('/api/users/department/:dept', authMiddleware, async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.get('/api/leads', async (req, res) => {
+app.get('/api/leads', authMiddleware, async (req, res) => {
     try {
-        const result = await pool.request().query(
-            'SELECT display_name, department FROM users WHERE is_admin = 1 AND is_master = 0 ORDER BY display_name'
-        );
+        const reqDb = pool.request();
+        let query = 'SELECT display_name, department FROM users WHERE is_admin = 1 AND is_master = 0';
+
+        if (req.user.is_master && !req.user.is_overlord) {
+            const masterDept = MASTER_DEPT_MAP[req.user.email] || req.user.department;
+            query += ' AND department = @dept';
+            reqDb.input('dept', sql.NVarChar(10), masterDept);
+        } else if (!req.user.is_overlord) {
+            query += ' AND department = @dept';
+            reqDb.input('dept', sql.NVarChar(10), req.user.department);
+        }
+
+        query += ' ORDER BY display_name';
+        const result = await reqDb.query(query);
         const grouped = {};
         for (const dept of VALID_DEPARTMENTS) grouped[dept] = [];
         for (const r of result.recordset) {

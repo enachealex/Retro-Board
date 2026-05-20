@@ -7,7 +7,6 @@ import axios from "axios";
 import "./Auth.css";
 
 const API_URL = getApiUrl();
-const EMAIL_VERIFICATION_FALLBACK_KEY = import.meta.env.VITE_EMAIL_VERIFICATION_FALLBACK_KEY || "";
 
 export default function RegisterPage({ onGoToLogin }) {
   const { register, authError, authLoading, setAuthError } = useAuth();
@@ -159,14 +158,7 @@ export default function RegisterPage({ onGoToLogin }) {
     setVerificationResendLoading(true);
     setVerificationResendMessage("");
     try {
-      const headers = EMAIL_VERIFICATION_FALLBACK_KEY
-        ? { "x-verify-fallback-key": EMAIL_VERIFICATION_FALLBACK_KEY }
-        : undefined;
-      const res = await axios.post(
-        `${API_URL}/auth/resend-verification`,
-        { email: targetEmail },
-        headers ? { headers } : undefined,
-      );
+      const res = await axios.post(`${API_URL}/auth/resend-verification`, { email: targetEmail });
       if (res.data?.delivery === "manual") {
         setManualVerificationUrl(res.data?.verificationUrl || "");
         setManualVerificationToken(res.data?.verificationToken || "");

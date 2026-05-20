@@ -425,7 +425,10 @@ const App = () => {
 
   const fetchLeads = async () => {
     try {
-      const res = await axios.get(`${API_URL}/leads`, { params: { company: effectiveCompanyFilter || '' } });
+      const res = await axios.get(`${API_URL}/leads`, {
+        ...authHeaders(token),
+        params: { company: effectiveCompanyFilter || '' },
+      });
       setLeadsByDept(res.data);
     } catch (e) { console.error("Error fetching leads", e); }
   };
@@ -1053,12 +1056,13 @@ const App = () => {
 
   // WebSocket real-time sync — only update when new data comes in
   useEffect(() => {
-    socket.connect();
-
-    // Register this socket with the user's ID so the server can send targeted events
-    if (user?.id) {
-      socket.emit('register:user', user.id);
+    if (!token) {
+      socket.disconnect();
+      return;
     }
+
+    socket.auth = { token };
+    socket.connect();
 
     // Join the room for the active board so we only receive its updates
     if (activeBoard?.id) {
@@ -1115,7 +1119,7 @@ const App = () => {
       socket.off("boards:refresh");
       socket.disconnect();
     };
-  }, [activeBoard?.id, isSuperUser, isAdmin, user?.lead, effectiveCompanyFilter]);
+  }, [activeBoard?.id, isSuperUser, isAdmin, user?.lead, effectiveCompanyFilter, token]);
 
   // Invite deep-link prompt (opened after sign-in)
   useEffect(() => {
