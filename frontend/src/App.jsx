@@ -2674,7 +2674,6 @@ const App = () => {
                               {!canRemove && (
                                 <span className="sidebar-company-filter-protected" title={removeReason}>
                                   <Lock size={11} />
-                                  <span>Protected</span>
                                 </span>
                               )}
                             </button>

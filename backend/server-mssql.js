@@ -21,15 +21,24 @@ const sslAvailable = fs.existsSync(SSL_KEY_PATH) && fs.existsSync(SSL_CERT_PATH)
 const SSL_PORT = Number.parseInt(process.env.SSL_PORT || '5443', 10);
 
 // --- Email (nodemailer) ---
+const SMTP_PORT = Number.parseInt(process.env.SMTP_PORT || '587', 10);
+const SMTP_SECURE = process.env.SMTP_SECURE
+    ? process.env.SMTP_SECURE === 'true'
+    : SMTP_PORT === 465;
+const SMTP_INSECURE_TLS = process.env.SMTP_INSECURE_TLS === 'true';
+const SMTP_REQUIRE_TLS = process.env.SMTP_REQUIRE_TLS === 'true';
+
 const emailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp-mail.outlook.com',
-    port: Number.parseInt(process.env.SMTP_PORT || '587', 10),
-    secure: false,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
     auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
-    tls: process.env.SMTP_INSECURE_TLS === 'true' ? { rejectUnauthorized: false } : undefined
+    requireTLS: SMTP_REQUIRE_TLS,
+    tls: SMTP_INSECURE_TLS ? { rejectUnauthorized: false } : undefined
 });
 
-const EMAIL_FROM = process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>';
+const EMAIL_FROM = process.env.SMTP_FROM
+    || (process.env.SMTP_USER ? `"Vault Jump Retro" <${process.env.SMTP_USER}>` : '"Vault Jump Retro" <no-reply@thejumpvault.com>');
 
 function escapeHtml(value) {
     return String(value ?? '')

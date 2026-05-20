@@ -220,7 +220,8 @@ body.dark-theme .sidebar-collapsed:hover {
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  right: 0;
+  min-width: 220px;
+  max-width: min(320px, calc(100vw - 16px));
   z-index: 1200;
   background: #0a1a4a;
   border: 1px solid rgba(138, 168, 216, 0.4);
@@ -252,9 +253,6 @@ body.dark-theme .sidebar-collapsed:hover {
   border-radius: 5px;
   font-size: 0.84rem;
   cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sidebar-company-filter-option-name {

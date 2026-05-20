@@ -8,7 +8,8 @@ const emailTransporter = nodemailer.createTransport({
     tls: process.env.SMTP_INSECURE_TLS === 'true' ? { rejectUnauthorized: false } : undefined
 });
 
-  const EMAIL_FROM = process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>';
+const EMAIL_FROM = process.env.SMTP_FROM
+    || (process.env.SMTP_USER ? `"Vault Jump Retro" <${process.env.SMTP_USER}>` : '"Vault Jump Retro" <no-reply@thejumpvault.com>');
 
 function escapeHtml(value) {
     return String(value ?? '')
