@@ -2113,7 +2113,7 @@ app.post('/api/auth/reset-password', passwordLimiter, async (req, res) => {
 
         const password_hash = await hashPassword(newPassword);
         await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [password_hash, rows[0].user_id]);
-        await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?', [rows[0].id]);
+        await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL', [rows[0].user_id]);
         res.json({ success: true });
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });

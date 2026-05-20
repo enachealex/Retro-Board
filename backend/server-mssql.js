@@ -1810,8 +1810,8 @@ app.post('/api/auth/reset-password', passwordLimiter, async (req, res) => {
             .input('userId', sql.Int, result.recordset[0].user_id)
             .query('UPDATE users SET password_hash = @passwordHash WHERE id = @userId');
         await pool.request()
-            .input('id', sql.Int, result.recordset[0].id)
-            .query('UPDATE password_reset_tokens SET used_at = GETDATE() WHERE id = @id');
+            .input('userId', sql.Int, result.recordset[0].user_id)
+            .query('UPDATE password_reset_tokens SET used_at = GETDATE() WHERE user_id = @userId AND used_at IS NULL');
         res.json({ success: true });
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
