@@ -4,6 +4,7 @@ import axios from "axios";
 import { useAuth } from "./AuthContext";
 import { getAuthUrl } from "./config";
 import CaptchaChallenge from "./CaptchaChallenge";
+import { getCaptchaTrustToken } from "./captchaTrust";
 import "./Auth.css";
 
 export default function LoginPage({ onGoToRegister }) {
@@ -39,7 +40,7 @@ export default function LoginPage({ onGoToRegister }) {
   const [showConfirmNew, setShowConfirmNew] = useState(false);
   const [updateError, setUpdateError] = useState(null);
   const [updating, setUpdating] = useState(false);
-  const [captcha, setCaptcha] = useState({ token: "", answer: "" });
+  const [captcha, setCaptcha] = useState({ token: "", answer: "", solved: false, startedAt: 0, completedAt: 0, rememberDevice: false });
   const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
   const [securityStep, setSecurityStep] = useState(false);
 
@@ -93,14 +94,28 @@ export default function LoginPage({ onGoToRegister }) {
     setAuthError(null);
     if (!email.trim() || !password) return;
 
-    setCaptcha({ token: "", answer: "" });
+    if (getCaptchaTrustToken()) {
+      const trustedResult = await login(email.trim(), password, null);
+      if (trustedResult && typeof trustedResult === 'object' && trustedResult.captchaRequired) {
+        setCaptcha({ token: "", answer: "", solved: false, startedAt: 0, completedAt: 0, rememberDevice: false });
+        setCaptchaReloadKey((key) => key + 1);
+        setSecurityStep(true);
+      } else if (trustedResult && typeof trustedResult === 'object' && trustedResult.password_weak) {
+        setForceUpdate({ token: trustedResult.token, user: trustedResult.user });
+      } else if (trustedResult?.emailVerificationRequired) {
+        setVerificationResendEmail(trustedResult.email || email.trim());
+      }
+      return;
+    }
+
+    setCaptcha({ token: "", answer: "", solved: false, startedAt: 0, completedAt: 0, rememberDevice: false });
     setCaptchaReloadKey((key) => key + 1);
     setSecurityStep(true);
   };
 
   const handleSecuritySubmit = async (e) => {
     e.preventDefault();
-    if (!captcha.token || !captcha.answer.trim()) {
+    if (!captcha.token || !captcha.solved) {
       setAuthError("Complete the security check.");
       return;
     }
@@ -112,13 +127,13 @@ export default function LoginPage({ onGoToRegister }) {
       setSecurityStep(false);
     } else if (!result) {
       setSecurityStep(false);
-      setCaptcha({ token: "", answer: "" });
+      setCaptcha({ token: "", answer: "", solved: false, startedAt: 0, completedAt: 0, rememberDevice: false });
     }
   };
 
   const handleSecurityBack = () => {
     setSecurityStep(false);
-    setCaptcha({ token: "", answer: "" });
+    setCaptcha({ token: "", answer: "", solved: false, startedAt: 0, completedAt: 0, rememberDevice: false });
     setAuthError(null);
   };
 
@@ -444,7 +459,7 @@ export default function LoginPage({ onGoToRegister }) {
             <button
               type="submit"
               className="auth-btn-primary"
-              disabled={authLoading || !captcha.token || !captcha.answer.trim()}
+              disabled={authLoading || !captcha.token || !captcha.solved}
             >
               {authLoading ? "Signing in…" : "Sign In"}
             </button>

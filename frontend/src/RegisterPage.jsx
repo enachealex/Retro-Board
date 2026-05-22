@@ -4,6 +4,7 @@ import { useAuth } from "./AuthContext";
 import { getApiUrl } from "./config";
 import CaptchaChallenge from "./CaptchaChallenge";
 import axios from "axios";
+import { getCaptchaTrustToken } from "./captchaTrust";
 import "./Auth.css";
 
 const API_URL = getApiUrl();
@@ -24,7 +25,7 @@ export default function RegisterPage({ onGoToLogin }) {
   const [inviteToken, setInviteToken] = useState("");
   const [loadingInvite, setLoadingInvite] = useState(false);
   const [localError, setLocalError] = useState(null);
-  const [captcha, setCaptcha] = useState({ token: "", answer: "" });
+  const [captcha, setCaptcha] = useState({ token: "", answer: "", solved: false, startedAt: 0, completedAt: 0, rememberDevice: false });
   const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
   const [securityStep, setSecurityStep] = useState(false);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
@@ -127,7 +128,24 @@ export default function RegisterPage({ onGoToLogin }) {
       return;
     }
 
-    setCaptcha({ token: "", answer: "" });
+    if (getCaptchaTrustToken()) {
+      const trustedResult = await register(firstName.trim(), lastName.trim(), email.trim(), password, company.trim(), inviteToken, null);
+      if (trustedResult && typeof trustedResult === "object" && trustedResult.captchaRequired) {
+        setCaptcha({ token: "", answer: "", solved: false, startedAt: 0, completedAt: 0, rememberDevice: false });
+        setCaptchaReloadKey((key) => key + 1);
+        setSecurityStep(true);
+      } else if (trustedResult && typeof trustedResult === "object" && (trustedResult.emailVerificationRequired || trustedResult.email)) {
+        setPendingVerificationEmail(trustedResult.email || email.trim());
+        setManualVerificationUrl(trustedResult.delivery === "manual" ? (trustedResult.verificationUrl || "") : "");
+        setManualVerificationToken(trustedResult.delivery === "manual" ? (trustedResult.verificationToken || "") : "");
+        setShowManualToken(false);
+        setCopyMessage("");
+        setVerificationResendMessage("");
+      }
+      return;
+    }
+
+    setCaptcha({ token: "", answer: "", solved: false, startedAt: 0, completedAt: 0, rememberDevice: false });
     setCaptchaReloadKey((key) => key + 1);
     setSecurityStep(true);
   };
@@ -136,7 +154,7 @@ export default function RegisterPage({ onGoToLogin }) {
     e.preventDefault();
     clearErrors();
 
-    if (!captcha.token || !captcha.answer.trim()) {
+    if (!captcha.token || !captcha.solved) {
       setLocalError("Complete the security check.");
       return;
     }
@@ -150,7 +168,7 @@ export default function RegisterPage({ onGoToLogin }) {
       setCopyMessage("");
       setVerificationResendMessage("");
       setSecurityStep(false);
-      setCaptcha({ token: "", answer: "" });
+      setCaptcha({ token: "", answer: "", solved: false, startedAt: 0, completedAt: 0, rememberDevice: false });
       return;
     }
     if (!result) setCaptchaReloadKey((key) => key + 1);
@@ -312,7 +330,7 @@ export default function RegisterPage({ onGoToLogin }) {
             <button
               type="submit"
               className="auth-btn-primary"
-              disabled={authLoading || !captcha.token || !captcha.answer.trim()}
+              disabled={authLoading || !captcha.token || !captcha.solved}
             >
               {authLoading ? "Creating account…" : "Create Account"}
             </button>

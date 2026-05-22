@@ -5,6 +5,7 @@ import App from './App.jsx'
 import { AuthProvider, useAuth } from './AuthContext.jsx'
 import LoginPage from './LoginPage.jsx'
 import RegisterPage from './RegisterPage.jsx'
+import CaptchaTestPage from './CaptchaTestPage.jsx'
 import { initConnection } from './config.js'
 
 class ErrorBoundary extends React.Component {
@@ -40,10 +41,13 @@ class ErrorBoundary extends React.Component {
 function AuthGate() {
   const { isAuthenticated, token } = useAuth();
   const [view, setView] = useState('login'); // 'login' | 'register'
+  const pathname = window.location.pathname.toLowerCase();
+  const search = new URLSearchParams(window.location.search);
+  const isCaptchaOnly = pathname === '/captcha-test' || search.get('captchaTest') === '1';
 
   useEffect(() => {
-    document.title = 'Vault Jump Retro';
-  }, []);
+    document.title = isCaptchaOnly ? 'Vault Jump Retro - Captcha Test' : 'Vault Jump Retro';
+  }, [isCaptchaOnly]);
 
   // Reveal the root div now that React has determined what to show
   useEffect(() => {
@@ -58,6 +62,10 @@ function AuthGate() {
 
   // Trust the token from localStorage — if it exists, show the app immediately.
   // The background /me check will kick back to login if it's actually expired.
+  if (isCaptchaOnly) {
+    return <CaptchaTestPage />;
+  }
+
   if (token) {
     return <App />;
   }

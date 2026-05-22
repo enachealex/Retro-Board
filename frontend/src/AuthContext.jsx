@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import axios from "axios";
 import { getAuthUrl } from "./config";
+import { getCaptchaTrustToken, storeCaptchaTrust } from "./captchaTrust";
 
 const TOKEN_KEY = "retro_board_token";
 const USER_KEY = "retro_board_user";
@@ -97,7 +98,15 @@ export function AuthProvider({ children }) {
     setAuthError(null);
     const AUTH_URL = getAuthUrl();
     try {
-      const res = await axios.post(`${AUTH_URL}/login`, { email, password, captcha });
+      const res = await axios.post(`${AUTH_URL}/login`, {
+        email,
+        password,
+        captcha,
+        captchaTrustToken: getCaptchaTrustToken(),
+      });
+      if (res.data?.captchaTrust) {
+        storeCaptchaTrust(res.data.captchaTrust);
+      }
       if (res.data.password_weak) {
         // Don't persist auth yet — return the temp token so the UI can force a password change
         return { password_weak: true, token: res.data.token, user: res.data.user };
@@ -106,6 +115,10 @@ export function AuthProvider({ children }) {
       return true;
     } catch (err) {
       const msg = err.response?.data?.error || "Login failed. Please try again.";
+      if (/security check|slide to unlock/i.test(msg)) {
+        setAuthError(null);
+        return { captchaRequired: true };
+      }
       setAuthError(msg);
       if (err.response?.data?.code === "EMAIL_NOT_VERIFIED") {
         return {
@@ -125,7 +138,19 @@ export function AuthProvider({ children }) {
     setAuthError(null);
     const AUTH_URL = getAuthUrl();
     try {
-      const res = await axios.post(`${AUTH_URL}/register`, { firstName, lastName, email, password, company, inviteToken, captcha });
+      const res = await axios.post(`${AUTH_URL}/register`, {
+        firstName,
+        lastName,
+        email,
+        password,
+        company,
+        inviteToken,
+        captcha,
+        captchaTrustToken: getCaptchaTrustToken(),
+      });
+      if (res.data?.captchaTrust) {
+        storeCaptchaTrust(res.data.captchaTrust);
+      }
       if (res.data?.redirectBoardId) {
         localStorage.setItem("retro_redirect_board_id", String(res.data.redirectBoardId));
       }
@@ -141,6 +166,10 @@ export function AuthProvider({ children }) {
       };
     } catch (err) {
       const msg = err.response?.data?.error || "Registration failed. Please try again.";
+      if (/security check|slide to unlock/i.test(msg)) {
+        setAuthError(null);
+        return { captchaRequired: true };
+      }
       setAuthError(msg);
       return false;
     } finally {
