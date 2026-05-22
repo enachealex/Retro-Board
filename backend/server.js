@@ -2953,9 +2953,9 @@ app.get('/api/role-label-permissions', authMiddleware, async (req, res) => {
     }
 });
 
-app.put('/api/role-label-permissions/:roleKey', authMiddleware, async (req, res) => {
+const upsertRoleLabelPermissionsHandler = async (req, res, roleKeyInput) => {
     if (!req.user.is_master) return res.status(403).json({ error: 'Only masters can edit role permissions' });
-    const roleKey = String(req.params?.roleKey || '').trim().toLowerCase();
+    const roleKey = String(roleKeyInput || '').trim().toLowerCase();
     if (!roleKey) return res.status(400).json({ error: 'roleKey required' });
 
     try {
@@ -2978,6 +2978,18 @@ app.put('/api/role-label-permissions/:roleKey', authMiddleware, async (req, res)
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
+};
+
+app.put('/api/role-label-permissions/:roleKey', authMiddleware, async (req, res) => {
+    return upsertRoleLabelPermissionsHandler(req, res, req.params?.roleKey);
+});
+
+app.patch('/api/role-label-permissions/:roleKey', authMiddleware, async (req, res) => {
+    return upsertRoleLabelPermissionsHandler(req, res, req.params?.roleKey);
+});
+
+app.post('/api/role-label-permissions/:roleKey', authMiddleware, async (req, res) => {
+    return upsertRoleLabelPermissionsHandler(req, res, req.params?.roleKey);
 });
 
 app.put('/api/role-labels', authMiddleware, async (req, res) => {

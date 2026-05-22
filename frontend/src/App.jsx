@@ -496,12 +496,23 @@ const App = () => {
     const draft = mergeRolePermissions(roleKey, permissionsModal.draft);
     setPermissionsModal((prev) => prev ? { ...prev, saving: true } : prev);
     try {
-      await axios.put(`${API_URL}/role-label-permissions/${encodeURIComponent(roleKey)}`, {
-        permissions: draft,
-      }, {
-        ...authHeaders(token),
-        params: roleLabelParams,
-      });
+      try {
+        await axios.put(`${API_URL}/role-label-permissions/${encodeURIComponent(roleKey)}`, {
+          permissions: draft,
+        }, {
+          ...authHeaders(token),
+          params: roleLabelParams,
+        });
+      } catch (primaryError) {
+        const status = primaryError?.response?.status || 0;
+        if (![404, 405].includes(status)) throw primaryError;
+        await axios.post(`${API_URL}/role-label-permissions/${encodeURIComponent(roleKey)}`, {
+          permissions: draft,
+        }, {
+          ...authHeaders(token),
+          params: roleLabelParams,
+        });
+      }
       setRolePermissionsByRole((prev) => ({ ...prev, [roleKey]: draft }));
       setPermissionsModal(null);
     } catch (e) {
