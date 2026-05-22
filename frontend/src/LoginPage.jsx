@@ -43,6 +43,11 @@ export default function LoginPage({ onGoToRegister }) {
   const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
   const [securityStep, setSecurityStep] = useState(false);
 
+  const isCaptchaErrorMessage = React.useCallback((message) => {
+    const value = String(message || "").toLowerCase();
+    return value.includes("security check") || value.includes("captcha") || value.includes("slide to unlock");
+  }, []);
+
   const handleCaptchaChange = React.useCallback((nextCaptcha) => {
     setCaptcha(nextCaptcha);
     setAuthError(null);
@@ -110,6 +115,15 @@ export default function LoginPage({ onGoToRegister }) {
     } else if (result?.emailVerificationRequired) {
       setVerificationResendEmail(result.email || email.trim());
       setSecurityStep(false);
+    } else if (result?.failed) {
+      if (isCaptchaErrorMessage(result.error)) {
+        setAuthError(result.error || "Security check failed. Please try the new challenge.");
+        setCaptcha({ token: "", answer: "" });
+        setCaptchaReloadKey((key) => key + 1);
+        return;
+      }
+      setSecurityStep(false);
+      setCaptcha({ token: "", answer: "" });
     } else if (!result) {
       setSecurityStep(false);
       setCaptcha({ token: "", answer: "" });

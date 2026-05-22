@@ -358,9 +358,69 @@ const CAPTCHA_TTL_MS = Number.parseInt(process.env.CAPTCHA_TTL_MS || '120000', 1
 const CAPTCHA_LENGTH = 6;
 const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const usedCaptchaNonces = new Map();
+const loginFailureTracker = new Map();
+const LOGIN_FAILURE_WINDOW_MS = Number.parseInt(process.env.LOGIN_FAILURE_WINDOW_MS || '900000', 10);
+const LOGIN_FAILURE_THRESHOLD = Number.parseInt(process.env.LOGIN_FAILURE_THRESHOLD || '5', 10);
+const LOGIN_COOLDOWN_MS = Number.parseInt(process.env.LOGIN_COOLDOWN_MS || '300000', 10);
 const LANDING_PADS_REQUIRED_STREAK = 5;
 const LANDING_PADS_TTL_MS = Number.parseInt(process.env.LANDING_PADS_TTL_MS || '600000', 10);
 const usedLandingPadTokens = new Map();
+
+function cleanupLoginFailureTracker(now = Date.now()) {
+    for (const [key, state] of loginFailureTracker.entries()) {
+        if (!state) {
+            loginFailureTracker.delete(key);
+            continue;
+        }
+        const stale = Number(state.lockedUntil || 0) <= now && Number(state.lastFailedAt || 0) + LOGIN_FAILURE_WINDOW_MS <= now;
+        if (stale) loginFailureTracker.delete(key);
+    }
+}
+
+function loginThrottleKey(req, email) {
+    return `email:${String(email || '').trim().toLowerCase()}|ip:${requestIp(req)}`;
+}
+
+function enforceLoginCooldownOrThrow(req, email) {
+    cleanupLoginFailureTracker();
+    const key = loginThrottleKey(req, email);
+    const state = loginFailureTracker.get(key);
+    const now = Date.now();
+    if (!state || !state.lockedUntil || Number(state.lockedUntil) <= now) return;
+    const retryAfterSeconds = Math.max(1, Math.ceil((Number(state.lockedUntil) - now) / 1000));
+    const err = new Error(`Too many failed sign-in attempts. Try again in ${retryAfterSeconds} seconds.`);
+    err.status = 429;
+    throw err;
+}
+
+function recordLoginFailure(req, email, reason) {
+    const key = loginThrottleKey(req, email);
+    const now = Date.now();
+    const existing = loginFailureTracker.get(key);
+    const withinWindow = existing && Number(existing.firstFailedAt || 0) + LOGIN_FAILURE_WINDOW_MS > now;
+    const state = withinWindow
+        ? { ...existing, failures: Number(existing.failures || 0) + 1, lastFailedAt: now }
+        : { failures: 1, firstFailedAt: now, lastFailedAt: now, lockedUntil: 0 };
+    if (state.failures >= LOGIN_FAILURE_THRESHOLD) {
+        state.lockedUntil = now + LOGIN_COOLDOWN_MS;
+    }
+    loginFailureTracker.set(key, state);
+    if (state.lockedUntil) {
+        logSecurityEvent('auth_login_cooldown', {
+            alert: true,
+            ip: requestIp(req),
+            identity: securityIdentityFromRequest(req),
+            email: String(email || '').trim().toLowerCase(),
+            reason,
+            retryAfterMs: LOGIN_COOLDOWN_MS,
+            failures: state.failures,
+        });
+    }
+}
+
+function clearLoginFailures(req, email) {
+    loginFailureTracker.delete(loginThrottleKey(req, email));
+}
 
 function cleanupCaptchaNonces(now = Date.now()) {
     for (const [nonce, expiresAt] of usedCaptchaNonces.entries()) {
@@ -839,6 +899,14 @@ const passwordLimiter = createIdentityLimiter({
     message: 'Too many password change attempts, please try again later',
     eventName: 'password',
     keyBuilder: (req) => `${securityIdentityFromRequest(req)}|ip:${requestIp(req)}`,
+});
+
+const captchaChallengeLimiter = createIdentityLimiter({
+    windowMs: 10 * 60 * 1000,
+    max: 40,
+    message: 'Too many captcha requests, please wait a moment',
+    eventName: 'captcha_challenge',
+    keyBuilder: (req) => `captcha|ip:${requestIp(req)}`,
 });
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
@@ -1394,7 +1462,7 @@ async function ensureDefaultAdminBoardMssql(firstName, lastName, department, use
 // AUTH ROUTES
 // =====================================================================
 
-app.get('/api/auth/captcha', (req, res) => {
+app.get('/api/auth/captcha', captchaChallengeLimiter, (req, res) => {
     res.set('Cache-Control', 'no-store');
     res.json(createCaptchaChallenge());
 });
@@ -1614,6 +1682,14 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
             });
         }
     } catch (error) {
+        if (error?.status === 400 && /security check/i.test(String(error.message || ''))) {
+            logSecurityEvent('captcha_failed', {
+                ip: requestIp(req),
+                identity: securityIdentityFromRequest(req),
+                path: req.originalUrl,
+                reason: error.message,
+            }, 'info');
+        }
         if (error.status) return res.status(error.status).json({ error: error.message });
         console.error('Register error:', error);
         res.status(500).json({ error: 'Internal server error' });
@@ -1623,13 +1699,16 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password, captcha } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
+    const loginEmail = String(email || '').trim().toLowerCase();
     try {
+        enforceLoginCooldownOrThrow(req, loginEmail);
         verifyCaptchaOrThrow(captcha, { allowSessionProof: true });
 
         const result = await pool.request()
-            .input('email', sql.NVarChar(255), email.trim().toLowerCase())
+            .input('email', sql.NVarChar(255), loginEmail)
             .query('SELECT * FROM users WHERE email = @email');
         if (result.recordset.length === 0) {
+            recordLoginFailure(req, loginEmail, 'user_not_found');
             logSecurityEvent('auth_login_failed', {
                 ip: requestIp(req),
                 identity: securityIdentityFromRequest(req),
@@ -1664,6 +1743,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             return res.status(401).json({ error: 'Your account has been created but you need to register first. Click "Create an account" to set your name and password.' });
         const valid = await verifyPassword(password, user.password_hash);
         if (!valid) {
+            recordLoginFailure(req, loginEmail, 'invalid_password');
             logSecurityEvent('auth_login_failed', {
                 ip: requestIp(req),
                 identity: securityIdentityFromRequest(req),
@@ -1672,6 +1752,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             });
             return res.status(401).json({ error: 'Invalid email or password' });
         }
+        clearLoginFailures(req, loginEmail);
         if (!user.email_verified_at) {
             logSecurityEvent('auth_login_denied', {
                 ip: requestIp(req),
@@ -1689,6 +1770,14 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         const password_weak = typeof password === 'string' && password.length < 6;
         res.json({ token, user: buildUserPublic(user), password_weak });
     } catch (error) {
+        if (error?.status === 400 && /security check/i.test(String(error.message || ''))) {
+            logSecurityEvent('captcha_failed', {
+                ip: requestIp(req),
+                identity: securityIdentityFromRequest(req),
+                path: req.originalUrl,
+                reason: error.message,
+            }, 'info');
+        }
         if (error.status) return res.status(error.status).json({ error: error.message });
         logSecurityEvent('auth_login_error', {
             alert: true,

@@ -113,7 +113,7 @@ export function AuthProvider({ children }) {
           email: err.response.data.email || email,
         };
       }
-      return false;
+      return { failed: true, error: msg, status: err.response?.status || 0 };
     } finally {
       setAuthLoading(false);
     }
@@ -142,7 +142,7 @@ export function AuthProvider({ children }) {
     } catch (err) {
       const msg = err.response?.data?.error || "Registration failed. Please try again.";
       setAuthError(msg);
-      return false;
+      return { failed: true, error: msg, status: err.response?.status || 0 };
     } finally {
       setAuthLoading(false);
     }

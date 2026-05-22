@@ -82,6 +82,48 @@ async function login(email, password) {
   return out.data;
 }
 
+async function runCaptchaRegressionChecks() {
+  log('captcha', 'verifying challenge endpoint and failure responses');
+  const challenge = await expectOk('captcha challenge', httpJson('/auth/captcha', { method: 'GET' }));
+  if (!challenge?.token || !challenge?.image) {
+    throw new Error(`captcha challenge missing fields: ${JSON.stringify(challenge)}`);
+  }
+
+  const wrongAnswerOut = await httpJson('/auth/login', {
+    method: 'POST',
+    body: {
+      email: 'captcha-probe@example.com',
+      password: 'not-real-password',
+      captcha: {
+        type: 'text-captcha',
+        token: challenge.token,
+        answer: 'WRONG1',
+      },
+    },
+  });
+
+  if (wrongAnswerOut.status !== 400 || !String(wrongAnswerOut.data?.error || '').toLowerCase().includes('security check')) {
+    throw new Error(`captcha wrong-answer expectation failed: status=${wrongAnswerOut.status} body=${JSON.stringify(wrongAnswerOut.data)}`);
+  }
+
+  const reusedNonceOut = await httpJson('/auth/login', {
+    method: 'POST',
+    body: {
+      email: 'captcha-probe@example.com',
+      password: 'not-real-password',
+      captcha: {
+        type: 'text-captcha',
+        token: challenge.token,
+        answer: 'WRONG2',
+      },
+    },
+  });
+
+  if (reusedNonceOut.status !== 400 || !String(reusedNonceOut.data?.error || '').toLowerCase().includes('already used')) {
+    throw new Error(`captcha reuse expectation failed: status=${reusedNonceOut.status} body=${JSON.stringify(reusedNonceOut.data)}`);
+  }
+}
+
 async function runRealtimeCheck(token, boardId) {
   log('realtime', `connecting socket for board ${boardId}`);
   const socket = io(BASE_URL, {
@@ -132,6 +174,8 @@ async function runRealtimeCheck(token, boardId) {
 
 async function main() {
   log('smoke', `starting against ${BASE_URL}`);
+
+  await runCaptchaRegressionChecks();
 
   let email = EXISTING_EMAIL;
   let password = EXISTING_PASSWORD;

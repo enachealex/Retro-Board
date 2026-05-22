@@ -35,6 +35,11 @@ export default function RegisterPage({ onGoToLogin }) {
   const [verificationResendLoading, setVerificationResendLoading] = useState(false);
   const [verificationResendMessage, setVerificationResendMessage] = useState("");
 
+  const isCaptchaErrorMessage = React.useCallback((message) => {
+    const value = String(message || "").toLowerCase();
+    return value.includes("security check") || value.includes("captcha") || value.includes("slide to unlock");
+  }, []);
+
   const error = localError || authError;
   const passwordsMatch = password === confirmPassword;
   const companyNames = Array.from(new Set([...companyOptions, invitePreview?.company].filter(Boolean)));
@@ -149,6 +154,17 @@ export default function RegisterPage({ onGoToLogin }) {
       setShowManualToken(false);
       setCopyMessage("");
       setVerificationResendMessage("");
+      setSecurityStep(false);
+      setCaptcha({ token: "", answer: "" });
+      return;
+    }
+    if (result?.failed) {
+      if (isCaptchaErrorMessage(result.error)) {
+        setLocalError(result.error || "Security check failed. Please try the new challenge.");
+        setCaptcha({ token: "", answer: "" });
+        setCaptchaReloadKey((key) => key + 1);
+        return;
+      }
       setSecurityStep(false);
       setCaptcha({ token: "", answer: "" });
       return;
