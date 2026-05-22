@@ -418,8 +418,8 @@ async function verifyPassword(password, stored) {
 }
 
 const CAPTCHA_TTL_MS = Number.parseInt(process.env.CAPTCHA_TTL_MS || '120000', 10);
-const CAPTCHA_TRUST_SESSION_TTL_MS = Number.parseInt(process.env.CAPTCHA_TRUST_SESSION_TTL_MS || '43200000', 10);
-const CAPTCHA_TRUST_PERSIST_TTL_MS = Number.parseInt(process.env.CAPTCHA_TRUST_PERSIST_TTL_MS || '15552000000', 10);
+const CAPTCHA_LENGTH = 6;
+const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const usedCaptchaNonces = new Map();
 const LANDING_PADS_REQUIRED_STREAK = 5;
 const LANDING_PADS_TTL_MS = Number.parseInt(process.env.LANDING_PADS_TTL_MS || '600000', 10);
@@ -432,7 +432,7 @@ function cleanupCaptchaNonces(now = Date.now()) {
 }
 
 function normalizeCaptchaAnswer(answer) {
-    return String(answer || '').trim();
+    return String(answer || '').replace(/\s+/g, '').toUpperCase();
 }
 
 function cleanupLandingPadTokens(now = Date.now()) {
@@ -482,9 +482,19 @@ function verifyLandingPadsOrThrow(captcha, options = {}) {
     usedLandingPadTokens.set(token, now + LANDING_PADS_TTL_MS);
 }
 
-function parseSliderAnswer(answer) {
-    const parsed = Number(normalizeCaptchaAnswer(answer));
-    return Number.isFinite(parsed) ? parsed : Number.NaN;
+function createCaptchaCode() {
+    let code = '';
+    for (let i = 0; i < CAPTCHA_LENGTH; i++) {
+        code += CAPTCHA_CHARS[crypto.randomInt(0, CAPTCHA_CHARS.length)];
+    }
+    return code;
+}
+
+function createCaptchaAnswerHash(nonce, expiresAt, answer) {
+    return crypto
+        .createHmac('sha256', `${JWT_SECRET}:captcha-answer`)
+        .update(`${nonce}:${expiresAt}:${normalizeCaptchaAnswer(answer)}`)
+        .digest('base64url');
 }
 
 function signCaptchaPayload(payload) {
@@ -507,69 +517,48 @@ function parseCaptchaToken(token) {
     }
 }
 
-function createCaptchaTrustToken(rememberDevice = false) {
-    const now = Date.now();
-    const persistent = !!rememberDevice;
-    const expiresAt = now + (persistent ? CAPTCHA_TRUST_PERSIST_TTL_MS : CAPTCHA_TRUST_SESSION_TTL_MS);
-    return {
-        token: signCaptchaPayload({
-            v: 1,
-            kind: 'captcha-trust',
-            nonce: createRandomToken(18),
-            issuedAt: now,
-            expiresAt,
-            persistent,
-        }),
-        expiresAt,
-        persistent,
-    };
-}
-
-function parseCaptchaTrustToken(token) {
-    const payload = parseCaptchaToken(token);
-    const now = Date.now();
-    if (!payload || payload?.kind !== 'captcha-trust' || payload?.v !== 1) return null;
-    if (!payload.nonce || !payload.expiresAt || Number(payload.expiresAt) <= now) return null;
-    return payload;
-}
-
-function extractCaptchaTrustToken(req, captcha) {
-    const requestToken = String(req.body?.captchaTrustToken || req.get('x-captcha-trust-token') || '').trim();
-    const captchaToken = String(captcha?.trustToken || '').trim();
-    return requestToken || captchaToken;
-}
-
-function hasCaptchaTrust(req, captcha) {
-    const token = extractCaptchaTrustToken(req, captcha);
-    if (!token) return false;
-    return !!parseCaptchaTrustToken(token);
-}
-
-function issueCaptchaTrust(captcha) {
-    const rememberDevice = !!captcha?.rememberDevice;
-    return createCaptchaTrustToken(rememberDevice);
+function renderCaptchaSvg(code) {
+    const width = 224;
+    const height = 78;
+    const chars = code.split('').map((char, index) => {
+        const x = 24 + index * 31 + crypto.randomInt(-3, 4);
+        const y = 48 + crypto.randomInt(-8, 9);
+        const rotation = crypto.randomInt(-18, 19);
+        const color = ['#001489', '#0b4f6c', '#5c2d91', '#1f7a5c'][crypto.randomInt(0, 4)];
+        return `<text x="${x}" y="${y}" transform="rotate(${rotation} ${x} ${y})" fill="${color}" font-size="34" font-family="Arial, Helvetica, sans-serif" font-weight="800">${char}</text>`;
+    }).join('');
+    const lines = Array.from({ length: 10 }, () => {
+        const x1 = crypto.randomInt(0, width);
+        const y1 = crypto.randomInt(0, height);
+        const x2 = crypto.randomInt(0, width);
+        const y2 = crypto.randomInt(0, height);
+        const opacity = (crypto.randomInt(18, 42) / 100).toFixed(2);
+        return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#001489" stroke-width="1.4" opacity="${opacity}" />`;
+    }).join('');
+    const dots = Array.from({ length: 44 }, () => {
+        const cx = crypto.randomInt(0, width);
+        const cy = crypto.randomInt(0, height);
+        const radius = crypto.randomInt(1, 3);
+        const opacity = (crypto.randomInt(18, 48) / 100).toFixed(2);
+        return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="#00A3FF" opacity="${opacity}" />`;
+    }).join('');
+    const wave = `M 6 ${crypto.randomInt(30, 48)} C 54 ${crypto.randomInt(2, 28)}, 92 ${crypto.randomInt(54, 74)}, 132 ${crypto.randomInt(24, 52)} S 194 ${crypto.randomInt(8, 68)}, 218 ${crypto.randomInt(32, 56)}`;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Security challenge"><rect width="100%" height="100%" rx="8" fill="#f4f7fb"/><path d="${wave}" fill="none" stroke="#ff8a00" stroke-width="3" opacity="0.55"/>${dots}${lines}${chars}</svg>`;
+    return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
 }
 
 function createCaptchaChallenge() {
     cleanupCaptchaNonces();
+    const code = createCaptchaCode();
     const nonce = createRandomToken(18);
     const expiresAt = Date.now() + CAPTCHA_TTL_MS;
-    const unlockAt = crypto.randomInt(95, 99);
     const token = signCaptchaPayload({
-        v: 2,
-        kind: 'slider-unlock',
+        v: 1,
         nonce,
         expiresAt,
-        unlockAt,
+        answerHash: createCaptchaAnswerHash(nonce, expiresAt, code),
     });
-    return {
-        type: 'slider-unlock',
-        token,
-        min: 0,
-        max: 100,
-        expiresAt,
-        expiresInSeconds: Math.floor(CAPTCHA_TTL_MS / 1000),
-    };
+    return { token, image: renderCaptchaSvg(code), expiresAt, expiresInSeconds: Math.floor(CAPTCHA_TTL_MS / 1000) };
 }
 
 function verifyCaptchaOrThrow(captcha, options = {}) {
@@ -579,10 +568,8 @@ function verifyCaptchaOrThrow(captcha, options = {}) {
     }
 
     const token = captcha?.token;
-    const answer = parseSliderAnswer(captcha?.answer);
-    const startedAt = Number(captcha?.startedAt || 0);
-    const completedAt = Number(captcha?.completedAt || 0);
-    if (!token || !Number.isFinite(answer)) {
+    const answer = normalizeCaptchaAnswer(captcha?.answer);
+    if (!token || !answer) {
         const err = new Error('Security check is required.');
         err.status = 400;
         throw err;
@@ -590,7 +577,7 @@ function verifyCaptchaOrThrow(captcha, options = {}) {
     const payload = parseCaptchaToken(token);
     const now = Date.now();
     cleanupCaptchaNonces(now);
-    if (!payload || payload?.v !== 2 || payload?.kind !== 'slider-unlock' || !payload?.nonce || !payload?.expiresAt || !Number.isFinite(Number(payload?.unlockAt))) {
+    if (!payload || payload.v !== 1 || !payload.nonce || !payload.expiresAt || !payload.answerHash) {
         const err = new Error('Security check is invalid. Please reload it.');
         err.status = 400;
         throw err;
@@ -606,13 +593,11 @@ function verifyCaptchaOrThrow(captcha, options = {}) {
         throw err;
     }
     usedCaptchaNonces.set(payload.nonce, Number(payload.expiresAt));
-    if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt) || completedAt < startedAt || completedAt - startedAt < 120 || completedAt - startedAt > 30000) {
-        const err = new Error('Security check is invalid. Please slide to unlock again.');
-        err.status = 400;
-        throw err;
-    }
-    if (answer < Number(payload.unlockAt)) {
-        const err = new Error('Slide to unlock was not completed.');
+    const expected = createCaptchaAnswerHash(payload.nonce, payload.expiresAt, answer);
+    const expectedBuffer = Buffer.from(expected);
+    const actualBuffer = Buffer.from(payload.answerHash);
+    if (expectedBuffer.length !== actualBuffer.length || !crypto.timingSafeEqual(expectedBuffer, actualBuffer)) {
+        const err = new Error('Security check was incorrect. Please try a new one.');
         err.status = 400;
         throw err;
     }
@@ -1669,22 +1654,8 @@ app.get('/api/auth/captcha', (req, res) => {
     res.json(createCaptchaChallenge());
 });
 
-app.post('/api/auth/captcha/verify', (req, res) => {
-    try {
-        const captcha = req.body?.captcha || req.body;
-        verifyCaptchaOrThrow(captcha);
-        return res.json({ ok: true, captchaTrust: issueCaptchaTrust(captcha) });
-    } catch (error) {
-        const status = error?.status || 400;
-        return res.status(status).json({ error: error?.message || 'Security check failed.' });
-    }
-});
-
 app.post('/api/auth/register', registerLimiter, async (req, res) => {
     const { firstName, lastName, email, password, company, department, lead, role, inviteToken, captcha } = req.body;
-    const captchaTrusted = hasCaptchaTrust(req, captcha);
-    const captchaTrust = captchaTrusted ? null : issueCaptchaTrust(captcha);
-    const withCaptchaTrust = (payload) => (captchaTrust ? { ...payload, captchaTrust } : payload);
     const emailLower = (email || '').toLowerCase();
     const isMasterEmail = MASTER_EMAILS.includes(emailLower);
 
@@ -1745,7 +1716,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     }
 
     try {
-        if (!isMasterAdd && !captchaTrusted) verifyCaptchaOrThrow(captcha);
+        if (!isMasterAdd) verifyCaptchaOrThrow(captcha);
 
         let inviteRecord = null;
         if (!isMasterAdd && inviteToken && typeof inviteToken === 'string' && inviteToken.trim()) {
@@ -1794,11 +1765,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
             try {
                 await issueEmailVerification(user);
-                return res.status(200).json(withCaptchaTrust(emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null })));
+                return res.status(200).json(emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null }));
             } catch {
                 const { token, verificationUrl } = await createEmailVerificationToken(user);
                 return res.status(200).json({
-                    ...withCaptchaTrust(emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null })),
+                    ...emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null }),
                     delivery: 'manual',
                     verificationToken: token,
                     verificationUrl,
@@ -1809,11 +1780,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
         if (existingEmail.length > 0 && !isMasterAdd && !existingEmail[0].email_verified_at) {
             try {
                 await issueEmailVerification(existingEmail[0]);
-                return res.status(200).json(withCaptchaTrust(emailVerificationResponse(existingEmail[0])));
+                return res.status(200).json(emailVerificationResponse(existingEmail[0]));
             } catch {
                 const { token, verificationUrl } = await createEmailVerificationToken(existingEmail[0]);
                 return res.status(200).json({
-                    ...withCaptchaTrust(emailVerificationResponse(existingEmail[0])),
+                    ...emailVerificationResponse(existingEmail[0]),
                     delivery: 'manual',
                     verificationToken: token,
                     verificationUrl,
@@ -1916,11 +1887,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
         try {
             await issueEmailVerification(newUser);
-            res.status(201).json(withCaptchaTrust(emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null })));
+            res.status(201).json(emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null }));
         } catch {
             const { token, verificationUrl } = await createEmailVerificationToken(newUser);
             return res.status(201).json({
-                ...withCaptchaTrust(emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null })),
+                ...emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null }),
                 delivery: 'manual',
                 verificationToken: token,
                 verificationUrl,
@@ -1935,13 +1906,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password, captcha } = req.body;
-    const captchaTrusted = hasCaptchaTrust(req, captcha);
-    const captchaTrust = captchaTrusted ? null : issueCaptchaTrust(captcha);
     if (!email || !password) {
         return res.status(400).json({ error: 'email and password are required' });
     }
     try {
-        if (!captchaTrusted) verifyCaptchaOrThrow(captcha, { allowSessionProof: true });
+        verifyCaptchaOrThrow(captcha, { allowSessionProof: true });
 
         const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email.trim().toLowerCase()]);
         if (rows.length === 0) {
@@ -1995,7 +1964,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         const token = buildUserToken(user);
         // Flag weak passwords so the frontend can force an update
         const password_weak = typeof password === 'string' && password.length < 6;
-        res.json({ token, user: buildUserPublic(user), password_weak, ...(captchaTrust ? { captchaTrust } : {}) });
+        res.json({ token, user: buildUserPublic(user), password_weak });
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
         logSecurityEvent('auth_login_error', {

@@ -192,117 +192,30 @@
   align-items: stretch;
 }
 
-.auth-slider-captcha-box {
-  align-items: center;
-}
-
-.auth-slider-shell {
-  border: 2px solid #6b7280;
-  border-radius: 12px;
-  background: #f6f6f6;
-  padding: 14px 16px 10px;
+.auth-captcha-image,
+.auth-captcha-placeholder {
+  width: 100%;
+  height: 78px;
+  border: 1.5px solid #dfe1e6;
+  border-radius: 8px;
+  background: #f4f7fb;
   -webkit-user-select: none;
   user-select: none;
 }
 
-.auth-slider-title {
-  color: #3f4752;
-  font-size: 1.95rem;
-  line-height: 1;
-  font-weight: 600;
-  text-align: center;
-  margin: 0 0 12px;
+.auth-captcha-image {
+  object-fit: cover;
+  display: block;
 }
 
-.auth-slider-track {
-  position: relative;
-  height: 36px;
-  border: 2px solid #6d6d6d;
-  border-radius: 999px;
-  background: #e4e4e4;
-  overflow: hidden;
-}
-
-.auth-slider-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 0;
-  background: linear-gradient(90deg, #cfd8e3 0%, #dbe7f4 100%);
-  transition: width 0.08s linear;
-}
-
-.auth-slider-input {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.auth-slider-input:disabled {
-  cursor: not-allowed;
-}
-
-.auth-slider-input::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 56px;
-  height: 32px;
-  border-radius: 999px;
-  border: 2px solid #707070;
-  background: linear-gradient(180deg, #fbfbfb 0%, #e9e9e9 100%);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-}
-
-.auth-slider-input::-moz-range-thumb {
-  width: 56px;
-  height: 32px;
-  border-radius: 999px;
-  border: 2px solid #707070;
-  background: linear-gradient(180deg, #fbfbfb 0%, #e9e9e9 100%);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-}
-
-.auth-slider-status {
-  margin-top: 8px;
-  text-align: center;
-  font-size: 0.84rem;
-  color: #4c5664;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.auth-slider-track.is-solved {
-  border-color: #1f845a;
-  background: #ddf7ec;
-}
-
-.auth-slider-status.is-solved {
-  color: #1f845a;
-}
-
-.auth-captcha-remember {
-  display: inline-flex;
+.auth-captcha-placeholder {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 0.86rem;
-  color: #44546f;
-  font-weight: 600;
-}
-
-.auth-captcha-remember input {
-  width: 16px;
-  height: 16px;
-  accent-color: #001489;
-}
-
-.auth-captcha-remember-note {
-  margin: -2px 0 0;
-  font-size: 0.78rem;
-  line-height: 1.35;
+  justify-content: center;
   color: #6b778c;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 .auth-captcha-refresh {
