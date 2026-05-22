@@ -39,7 +39,7 @@ export default function LoginPage({ onGoToRegister }) {
   const [showConfirmNew, setShowConfirmNew] = useState(false);
   const [updateError, setUpdateError] = useState(null);
   const [updating, setUpdating] = useState(false);
-  const [captcha, setCaptcha] = useState({ token: "", answer: "" });
+  const [captcha, setCaptcha] = useState({ token: "", answer: "", rememberDevice: false });
   const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
   const [securityStep, setSecurityStep] = useState(false);
 
@@ -98,9 +98,25 @@ export default function LoginPage({ onGoToRegister }) {
     setAuthError(null);
     if (!email.trim() || !password) return;
 
-    setCaptcha({ token: "", answer: "" });
-    setCaptchaReloadKey((key) => key + 1);
-    setSecurityStep(true);
+    const trustAttempt = await login(email.trim(), password, null);
+    if (trustAttempt && typeof trustAttempt === 'object' && trustAttempt.password_weak) {
+      setForceUpdate({ token: trustAttempt.token, user: trustAttempt.user });
+      return;
+    }
+    if (trustAttempt?.emailVerificationRequired) {
+      setVerificationResendEmail(trustAttempt.email || email.trim());
+      return;
+    }
+    if (trustAttempt?.failed) {
+      if (isCaptchaErrorMessage(trustAttempt.error)) {
+        setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
+        setCaptchaReloadKey((key) => key + 1);
+        setSecurityStep(true);
+        return;
+      }
+      return;
+    }
+    if (!trustAttempt) return;
   };
 
   const handleSecuritySubmit = async (e) => {
@@ -118,21 +134,21 @@ export default function LoginPage({ onGoToRegister }) {
     } else if (result?.failed) {
       if (isCaptchaErrorMessage(result.error)) {
         setAuthError(result.error || "Security check failed. Please try the new challenge.");
-        setCaptcha({ token: "", answer: "" });
+        setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
         setCaptchaReloadKey((key) => key + 1);
         return;
       }
       setSecurityStep(false);
-      setCaptcha({ token: "", answer: "" });
+      setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
     } else if (!result) {
       setSecurityStep(false);
-      setCaptcha({ token: "", answer: "" });
+      setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
     }
   };
 
   const handleSecurityBack = () => {
     setSecurityStep(false);
-    setCaptcha({ token: "", answer: "" });
+    setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
     setAuthError(null);
   };
 

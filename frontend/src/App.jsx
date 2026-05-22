@@ -496,6 +496,36 @@ const App = () => {
     });
   };
 
+  const renameCompanyOption = async (companyName) => {
+    const currentName = String(companyName || '').trim();
+    if (!currentName || currentName === DEFAULT_COMPANY) return;
+
+    const nextNameRaw = globalThis.prompt(`Rename company "${currentName}" to:`, currentName);
+    if (nextNameRaw == null) return;
+
+    const nextName = String(nextNameRaw).trim();
+    if (!nextName || nextName === currentName) return;
+    if (nextName === DEFAULT_COMPANY) {
+      alert("The default company name is reserved.");
+      return;
+    }
+
+    try {
+      await axios.patch(
+        `${API_URL}/companies/${encodeURIComponent(currentName)}`,
+        { newName: nextName },
+        authHeaders(token)
+      );
+      if (effectiveCompanyFilter === currentName) {
+        setMasterCompanyFilter(nextName);
+      }
+      await fetchCompanyFilterOptions();
+    } catch (e) {
+      console.error("Error renaming company", e);
+      alert(e.response?.data?.error || "Failed to rename company");
+    }
+  };
+
   useEffect(() => {
     if (!isSuperUser) return;
     fetchCompanyFilterOptions();
@@ -1496,9 +1526,6 @@ const App = () => {
     setBoards(remainingBoards);
     if (activeBoard?.id === boardId) {
       setActiveBoard(remainingBoards.length > 0 ? remainingBoards[0] : null);
-    }
-    if (remainingBoards.length === 0) {
-      setIsModalOpen(true);
     }
   };
 
@@ -2631,7 +2658,16 @@ const App = () => {
             <div className="sidebar-scrollable" style={{ fontSize: `${sidebarFontSize}%` }}>
             {isSuperUser && (sidebarPanel === "boards" || sidebarPanel === "users" || sidebarPanel === "labels") && (
               <div className="sidebar-company-filter-row">
-                <span className="sidebar-company-filter-label">Company</span>
+                <span className="sidebar-company-filter-label-wrap">
+                  <span className="sidebar-company-filter-label">Company</span>
+                  <span
+                    className="sidebar-company-filter-info"
+                    title="Tip: Right-click a company in the list for Edit/Delete options."
+                    aria-label="Right-click company names for Edit/Delete options"
+                  >
+                    <Info size={12} />
+                  </span>
+                </span>
                 <div
                   className="sidebar-company-filter-picker"
                   onClick={(e) => e.stopPropagation()}
@@ -2654,20 +2690,37 @@ const App = () => {
                         const ownerCompany = user?.company || DEFAULT_COMPANY;
                         const isDefaultCompany = name === DEFAULT_COMPANY;
                         const isActiveCompany = name === ownerCompany;
+                        const canEdit = !isDefaultCompany;
                         const canRemove = !isDefaultCompany && !isActiveCompany;
                         const removeReason = isDefaultCompany
                           ? "Default company cannot be removed"
                           : isActiveCompany
                             ? "Your active company cannot be removed"
                             : `Remove ${name}`;
+                        const editReason = isDefaultCompany ? "Default company cannot be renamed" : `Rename ${name}`;
                         return (
                           <div key={name} className={`sidebar-company-filter-option${effectiveCompanyFilter === name ? ' active' : ''}`}>
                             <button
                               type="button"
                               className="sidebar-company-filter-option-btn"
+                              title="Right-click for actions"
                               onClick={() => {
                                 setMasterCompanyFilter(name);
                                 setCompanyDropdownOpen(false);
+                              }}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setContextMenu({
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  type: "company",
+                                  name,
+                                  canEdit,
+                                  canRemove,
+                                  editReason,
+                                  removeReason,
+                                });
                               }}
                             >
                               <span className="sidebar-company-filter-option-name">{name}</span>
@@ -2676,21 +2729,6 @@ const App = () => {
                                   <Lock size={11} />
                                 </span>
                               )}
-                            </button>
-                            <button
-                              type="button"
-                              className="sidebar-company-filter-remove"
-                              title={removeReason}
-                              disabled={!canRemove}
-                              aria-label={removeReason}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (!canRemove) return;
-                                setCompanyDropdownOpen(false);
-                                removeCompanyOption(name);
-                              }}
-                            >
-                              <X size={12} />
                             </button>
                           </div>
                         );
@@ -3319,6 +3357,36 @@ const App = () => {
                     });
                   }}>
                     <UserMinus size={14} /> Remove from Board
+                  </button>
+                </>
+              )}
+              {contextMenu.type === "company" && (
+                <>
+                  <div className="context-menu-label">{contextMenu.name}</div>
+                  <button
+                    disabled={!contextMenu.canEdit}
+                    title={contextMenu.editReason}
+                    onClick={() => {
+                      const name = contextMenu.name;
+                      setContextMenu(null);
+                      setCompanyDropdownOpen(false);
+                      renameCompanyOption(name);
+                    }}
+                  >
+                    <Edit2 size={14} /> Edit
+                  </button>
+                  <button
+                    className="context-menu-danger"
+                    disabled={!contextMenu.canRemove}
+                    title={contextMenu.removeReason}
+                    onClick={() => {
+                      const name = contextMenu.name;
+                      setContextMenu(null);
+                      setCompanyDropdownOpen(false);
+                      removeCompanyOption(name);
+                    }}
+                  >
+                    <Trash2 size={14} /> Delete
                   </button>
                 </>
               )}

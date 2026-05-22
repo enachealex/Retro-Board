@@ -357,6 +357,8 @@ async function verifyPassword(password, stored) {
 const CAPTCHA_TTL_MS = Number.parseInt(process.env.CAPTCHA_TTL_MS || '120000', 10);
 const CAPTCHA_LENGTH = 6;
 const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const CAPTCHA_TRUST_SESSION_TTL_MS = Number.parseInt(process.env.CAPTCHA_TRUST_SESSION_TTL_MS || '43200000', 10);
+const CAPTCHA_TRUST_PERSIST_TTL_MS = Number.parseInt(process.env.CAPTCHA_TRUST_PERSIST_TTL_MS || '15552000000', 10);
 const usedCaptchaNonces = new Map();
 const loginFailureTracker = new Map();
 const LOGIN_FAILURE_WINDOW_MS = Number.parseInt(process.env.LOGIN_FAILURE_WINDOW_MS || '900000', 10);
@@ -512,6 +514,48 @@ function parseCaptchaToken(token) {
     } catch {
         return null;
     }
+}
+
+function createCaptchaTrustToken(rememberDevice = false) {
+    const now = Date.now();
+    const persistent = !!rememberDevice;
+    const expiresAt = now + (persistent ? CAPTCHA_TRUST_PERSIST_TTL_MS : CAPTCHA_TRUST_SESSION_TTL_MS);
+    return {
+        token: signCaptchaPayload({
+            v: 1,
+            kind: 'captcha-trust',
+            nonce: crypto.randomBytes(18).toString('base64url'),
+            issuedAt: now,
+            expiresAt,
+            persistent,
+        }),
+        expiresAt,
+        persistent,
+    };
+}
+
+function parseCaptchaTrustToken(token) {
+    const payload = parseCaptchaToken(token);
+    const now = Date.now();
+    if (!payload || payload?.kind !== 'captcha-trust' || payload?.v !== 1) return null;
+    if (!payload?.nonce || !payload?.expiresAt || Number(payload.expiresAt) <= now) return null;
+    return payload;
+}
+
+function extractCaptchaTrustToken(req, captcha) {
+    const requestToken = String(req.body?.captchaTrustToken || req.get('x-captcha-trust-token') || '').trim();
+    const captchaToken = String(captcha?.trustToken || '').trim();
+    return requestToken || captchaToken;
+}
+
+function hasCaptchaTrust(req, captcha) {
+    const token = extractCaptchaTrustToken(req, captcha);
+    if (!token) return false;
+    return !!parseCaptchaTrustToken(token);
+}
+
+function issueCaptchaTrust(captcha) {
+    return createCaptchaTrustToken(!!captcha?.rememberDevice);
 }
 
 function renderCaptchaSvg(code) {
@@ -1467,8 +1511,20 @@ app.get('/api/auth/captcha', captchaChallengeLimiter, (req, res) => {
     res.json(createCaptchaChallenge());
 });
 
+app.post('/api/auth/captcha/verify', authLimiter, (req, res) => {
+    try {
+        const captcha = req.body?.captcha || req.body;
+        verifyCaptchaOrThrow(captcha);
+        return res.json({ ok: true, captchaTrust: issueCaptchaTrust(captcha) });
+    } catch (error) {
+        const status = error?.status || 400;
+        return res.status(status).json({ error: error?.message || 'Security check failed.' });
+    }
+});
+
 app.post('/api/auth/register', registerLimiter, async (req, res) => {
     const { firstName, lastName, email, password, department, lead, role, captcha } = req.body;
+    const captchaTrusted = hasCaptchaTrust(req, captcha);
     const emailLower = (email || '').toLowerCase();
     const isMasterEmail = MASTER_EMAILS.includes(emailLower);
     const isOverlordEmail = OVERLORD_EMAILS.includes(emailLower);
@@ -1489,6 +1545,9 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
         return res.status(400).json({ error: 'A valid email address is required' });
 
     const isMasterAdd = (callerIsMaster || callerIsOverlord) && !password;
+    const shouldIssueCaptchaTrust = !isMasterAdd && !captchaTrusted && !!captcha?.token;
+    const captchaTrust = shouldIssueCaptchaTrust ? issueCaptchaTrust(captcha) : null;
+    const withCaptchaTrust = (payload) => (captchaTrust ? { ...payload, captchaTrust } : payload);
 
     if (!isMasterAdd) {
         if (!firstName || !lastName || !password)
@@ -1518,7 +1577,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     }
 
     try {
-        if (!isMasterAdd) verifyCaptchaOrThrow(captcha);
+        if (!isMasterAdd && !captchaTrusted) verifyCaptchaOrThrow(captcha);
 
         const existResult = await pool.request()
             .input('email', sql.NVarChar(255), emailLower)
@@ -1549,11 +1608,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
             }
             try {
                 await issueEmailVerification(user);
-                return res.status(200).json(emailVerificationResponse(user));
+                return res.status(200).json(withCaptchaTrust(emailVerificationResponse(user)));
             } catch {
                 const { token, verificationUrl } = await createEmailVerificationToken(user);
                 return res.status(200).json({
-                    ...emailVerificationResponse(user),
+                    ...withCaptchaTrust(emailVerificationResponse(user)),
                     delivery: 'manual',
                     verificationToken: token,
                     verificationUrl,
@@ -1564,11 +1623,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
         if (existResult.recordset.length > 0 && !isMasterAdd && !existResult.recordset[0].email_verified_at) {
             try {
                 await issueEmailVerification(existResult.recordset[0]);
-                return res.status(200).json(emailVerificationResponse(existResult.recordset[0]));
+                return res.status(200).json(withCaptchaTrust(emailVerificationResponse(existResult.recordset[0])));
             } catch {
                 const { token, verificationUrl } = await createEmailVerificationToken(existResult.recordset[0]);
                 return res.status(200).json({
-                    ...emailVerificationResponse(existResult.recordset[0]),
+                    ...withCaptchaTrust(emailVerificationResponse(existResult.recordset[0])),
                     delivery: 'manual',
                     verificationToken: token,
                     verificationUrl,
@@ -1671,11 +1730,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
         try {
             await issueEmailVerification(newUser);
-            res.status(201).json(emailVerificationResponse(newUser));
+            res.status(201).json(withCaptchaTrust(emailVerificationResponse(newUser)));
         } catch {
             const { token, verificationUrl } = await createEmailVerificationToken(newUser);
             return res.status(201).json({
-                ...emailVerificationResponse(newUser),
+                ...withCaptchaTrust(emailVerificationResponse(newUser)),
                 delivery: 'manual',
                 verificationToken: token,
                 verificationUrl,
@@ -1698,11 +1757,14 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password, captcha } = req.body;
+    const captchaTrusted = hasCaptchaTrust(req, captcha);
+    const shouldIssueCaptchaTrust = !captchaTrusted && !!captcha?.token;
+    const captchaTrust = shouldIssueCaptchaTrust ? issueCaptchaTrust(captcha) : null;
     if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
     const loginEmail = String(email || '').trim().toLowerCase();
     try {
         enforceLoginCooldownOrThrow(req, loginEmail);
-        verifyCaptchaOrThrow(captcha, { allowSessionProof: true });
+        if (!captchaTrusted) verifyCaptchaOrThrow(captcha, { allowSessionProof: true });
 
         const result = await pool.request()
             .input('email', sql.NVarChar(255), loginEmail)
@@ -1768,7 +1830,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         }
         const token = buildUserToken(user);
         const password_weak = typeof password === 'string' && password.length < 6;
-        res.json({ token, user: buildUserPublic(user), password_weak });
+        res.json({ token, user: buildUserPublic(user), password_weak, ...(captchaTrust ? { captchaTrust } : {}) });
     } catch (error) {
         if (error?.status === 400 && /security check/i.test(String(error.message || ''))) {
             logSecurityEvent('captcha_failed', {

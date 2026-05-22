@@ -5,6 +5,7 @@ import { getAuthUrl } from "./config";
 export default function CaptchaChallenge({ value, onChange, disabled, reloadKey = 0 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const rememberDevice = !!value?.rememberDevice;
 
   const loadChallenge = useCallback(async () => {
     setLoading(true);
@@ -16,14 +17,15 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
         token: res.data?.token || "",
         answer: "",
         image: res.data?.image || "",
+        rememberDevice,
       });
     } catch {
-      onChange({ type: "text-captcha", token: "", answer: "", image: "" });
+      onChange({ type: "text-captcha", token: "", answer: "", image: "", rememberDevice });
       setError("Could not load security challenge. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, [onChange]);
+  }, [onChange, rememberDevice]);
 
   useEffect(() => {
     loadChallenge();
@@ -40,6 +42,17 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
       token: value?.token || "",
       image: value?.image || "",
       answer: event.target.value,
+      rememberDevice,
+    });
+  };
+
+  const handleRememberChange = (event) => {
+    onChange({
+      type: "text-captcha",
+      token: value?.token || "",
+      image: value?.image || "",
+      answer: value?.answer || "",
+      rememberDevice: !!event.target.checked,
     });
   };
 
@@ -72,6 +85,15 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
         onChange={handleAnswerChange}
         disabled={disabled || loading || !value?.token}
       />
+      <label className="auth-captcha-remember">
+        <input
+          type="checkbox"
+          checked={rememberDevice}
+          onChange={handleRememberChange}
+          disabled={disabled || loading}
+        />
+        <span>Remember this device</span>
+      </label>
       {error ? <div className="auth-error auth-captcha-error" role="alert">{error}</div> : null}
     </div>
   );

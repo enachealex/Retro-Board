@@ -420,6 +420,8 @@ async function verifyPassword(password, stored) {
 const CAPTCHA_TTL_MS = Number.parseInt(process.env.CAPTCHA_TTL_MS || '120000', 10);
 const CAPTCHA_LENGTH = 6;
 const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const CAPTCHA_TRUST_SESSION_TTL_MS = Number.parseInt(process.env.CAPTCHA_TRUST_SESSION_TTL_MS || '43200000', 10);
+const CAPTCHA_TRUST_PERSIST_TTL_MS = Number.parseInt(process.env.CAPTCHA_TRUST_PERSIST_TTL_MS || '15552000000', 10);
 const usedCaptchaNonces = new Map();
 const loginFailureTracker = new Map();
 const LOGIN_FAILURE_WINDOW_MS = Number.parseInt(process.env.LOGIN_FAILURE_WINDOW_MS || '900000', 10);
@@ -575,6 +577,48 @@ function parseCaptchaToken(token) {
     } catch {
         return null;
     }
+}
+
+function createCaptchaTrustToken(rememberDevice = false) {
+    const now = Date.now();
+    const persistent = !!rememberDevice;
+    const expiresAt = now + (persistent ? CAPTCHA_TRUST_PERSIST_TTL_MS : CAPTCHA_TRUST_SESSION_TTL_MS);
+    return {
+        token: signCaptchaPayload({
+            v: 1,
+            kind: 'captcha-trust',
+            nonce: createRandomToken(18),
+            issuedAt: now,
+            expiresAt,
+            persistent,
+        }),
+        expiresAt,
+        persistent,
+    };
+}
+
+function parseCaptchaTrustToken(token) {
+    const payload = parseCaptchaToken(token);
+    const now = Date.now();
+    if (!payload || payload?.kind !== 'captcha-trust' || payload?.v !== 1) return null;
+    if (!payload?.nonce || !payload?.expiresAt || Number(payload.expiresAt) <= now) return null;
+    return payload;
+}
+
+function extractCaptchaTrustToken(req, captcha) {
+    const requestToken = String(req.body?.captchaTrustToken || req.get('x-captcha-trust-token') || '').trim();
+    const captchaToken = String(captcha?.trustToken || '').trim();
+    return requestToken || captchaToken;
+}
+
+function hasCaptchaTrust(req, captcha) {
+    const token = extractCaptchaTrustToken(req, captcha);
+    if (!token) return false;
+    return !!parseCaptchaTrustToken(token);
+}
+
+function issueCaptchaTrust(captcha) {
+    return createCaptchaTrustToken(!!captcha?.rememberDevice);
 }
 
 function renderCaptchaSvg(code) {
@@ -1722,8 +1766,20 @@ app.get('/api/auth/captcha', captchaChallengeLimiter, (req, res) => {
     res.json(createCaptchaChallenge());
 });
 
+app.post('/api/auth/captcha/verify', authLimiter, (req, res) => {
+    try {
+        const captcha = req.body?.captcha || req.body;
+        verifyCaptchaOrThrow(captcha);
+        return res.json({ ok: true, captchaTrust: issueCaptchaTrust(captcha) });
+    } catch (error) {
+        const status = error?.status || 400;
+        return res.status(status).json({ error: error?.message || 'Security check failed.' });
+    }
+});
+
 app.post('/api/auth/register', registerLimiter, async (req, res) => {
     const { firstName, lastName, email, password, company, department, lead, role, inviteToken, captcha } = req.body;
+    const captchaTrusted = hasCaptchaTrust(req, captcha);
     const emailLower = (email || '').toLowerCase();
     const isMasterEmail = MASTER_EMAILS.includes(emailLower);
 
@@ -1746,6 +1802,9 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
     // Master-initiated add: email + role, optionally with firstName/lastName (for admins)
     const isMasterAdd = callerIsMaster && !password;
+    const shouldIssueCaptchaTrust = !isMasterAdd && !captchaTrusted && !!captcha?.token;
+    const captchaTrust = shouldIssueCaptchaTrust ? issueCaptchaTrust(captcha) : null;
+    const withCaptchaTrust = (payload) => (captchaTrust ? { ...payload, captchaTrust } : payload);
 
     if (!isMasterAdd) {
         if (!firstName || !lastName || !password) {
@@ -1784,7 +1843,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     }
 
     try {
-        if (!isMasterAdd) verifyCaptchaOrThrow(captcha);
+        if (!isMasterAdd && !captchaTrusted) verifyCaptchaOrThrow(captcha);
 
         let inviteRecord = null;
         if (!isMasterAdd && inviteToken && typeof inviteToken === 'string' && inviteToken.trim()) {
@@ -1833,11 +1892,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
             try {
                 await issueEmailVerification(user);
-                return res.status(200).json(emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null }));
+                return res.status(200).json(withCaptchaTrust(emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null })));
             } catch {
                 const { token, verificationUrl } = await createEmailVerificationToken(user);
                 return res.status(200).json({
-                    ...emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null }),
+                    ...withCaptchaTrust(emailVerificationResponse(user, { redirectBoardId: inviteRecord?.board_id || null })),
                     delivery: 'manual',
                     verificationToken: token,
                     verificationUrl,
@@ -1848,11 +1907,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
         if (existingEmail.length > 0 && !isMasterAdd && !existingEmail[0].email_verified_at) {
             try {
                 await issueEmailVerification(existingEmail[0]);
-                return res.status(200).json(emailVerificationResponse(existingEmail[0]));
+                return res.status(200).json(withCaptchaTrust(emailVerificationResponse(existingEmail[0])));
             } catch {
                 const { token, verificationUrl } = await createEmailVerificationToken(existingEmail[0]);
                 return res.status(200).json({
-                    ...emailVerificationResponse(existingEmail[0]),
+                    ...withCaptchaTrust(emailVerificationResponse(existingEmail[0])),
                     delivery: 'manual',
                     verificationToken: token,
                     verificationUrl,
@@ -1955,11 +2014,11 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
         try {
             await issueEmailVerification(newUser);
-            res.status(201).json(emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null }));
+            res.status(201).json(withCaptchaTrust(emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null })));
         } catch {
             const { token, verificationUrl } = await createEmailVerificationToken(newUser);
             return res.status(201).json({
-                ...emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null }),
+                ...withCaptchaTrust(emailVerificationResponse(newUser, { redirectBoardId: inviteRecord?.board_id || null })),
                 delivery: 'manual',
                 verificationToken: token,
                 verificationUrl,
@@ -1982,13 +2041,16 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
 
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     const { email, password, captcha } = req.body;
+    const captchaTrusted = hasCaptchaTrust(req, captcha);
+    const shouldIssueCaptchaTrust = !captchaTrusted && !!captcha?.token;
+    const captchaTrust = shouldIssueCaptchaTrust ? issueCaptchaTrust(captcha) : null;
     if (!email || !password) {
         return res.status(400).json({ error: 'email and password are required' });
     }
     const loginEmail = String(email || '').trim().toLowerCase();
     try {
         enforceLoginCooldownOrThrow(req, loginEmail);
-        verifyCaptchaOrThrow(captcha, { allowSessionProof: true });
+        if (!captchaTrusted) verifyCaptchaOrThrow(captcha, { allowSessionProof: true });
 
         const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [loginEmail]);
         if (rows.length === 0) {
@@ -2045,7 +2107,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
         const token = buildUserToken(user);
         // Flag weak passwords so the frontend can force an update
         const password_weak = typeof password === 'string' && password.length < 6;
-        res.json({ token, user: buildUserPublic(user), password_weak });
+        res.json({ token, user: buildUserPublic(user), password_weak, ...(captchaTrust ? { captchaTrust } : {}) });
     } catch (error) {
         if (error?.status === 400 && /security check/i.test(String(error.message || ''))) {
             logSecurityEvent('captcha_failed', {
@@ -2132,6 +2194,53 @@ app.get('/api/companies', async (req, res) => {
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: error.message });
+    }
+});
+
+app.patch('/api/companies/:companyName', authMiddleware, async (req, res) => {
+    if (!req.user.is_master) return res.status(403).json({ error: 'Access denied' });
+
+    const companyName = String(decodeURIComponent(req.params.companyName || '')).trim();
+    const newName = String(req.body?.newName || '').trim();
+
+    if (!companyName) return res.status(400).json({ error: 'Company name is required' });
+    if (!newName) return res.status(400).json({ error: 'New company name is required' });
+    if (companyName === DEFAULT_COMPANY) return res.status(400).json({ error: 'Default company cannot be renamed' });
+    if (newName === DEFAULT_COMPANY) return res.status(400).json({ error: 'Default company name is reserved' });
+    if (companyName === newName) return res.json({ success: true, company: newName });
+
+    let connection;
+    try {
+        connection = await pool.getConnection();
+        await connection.beginTransaction();
+
+        const [existing] = await connection.query('SELECT id FROM companies WHERE name = ? LIMIT 1', [companyName]);
+        if (existing.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({ error: 'Company not found' });
+        }
+
+        const [duplicate] = await connection.query('SELECT id FROM companies WHERE name = ? LIMIT 1', [newName]);
+        if (duplicate.length > 0) {
+            await connection.rollback();
+            return res.status(409).json({ error: 'A company with this name already exists' });
+        }
+
+        await connection.query('UPDATE companies SET name = ? WHERE name = ?', [newName, companyName]);
+        await connection.query('UPDATE users SET company = ? WHERE company = ?', [newName, companyName]);
+        await connection.query('UPDATE boards SET company = ? WHERE company = ?', [newName, companyName]);
+        await connection.query('UPDATE role_labels SET company = ? WHERE company = ?', [newName, companyName]);
+
+        await connection.commit();
+        return res.json({ success: true, company: newName });
+    } catch (error) {
+        if (connection) {
+            try { await connection.rollback(); } catch (_) { /* ignore rollback errors */ }
+        }
+        if (error.status) return res.status(error.status).json({ error: error.message });
+        return res.status(500).json({ error: error.message });
+    } finally {
+        if (connection) connection.release();
     }
 });
 

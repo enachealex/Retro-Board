@@ -165,6 +165,26 @@ body.dark-theme .sidebar-collapsed:hover {
   font-weight: 600;
 }
 
+.sidebar-company-filter-label-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 58px;
+}
+
+.sidebar-company-filter-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #9fb9eb;
+  cursor: help;
+  opacity: 0.9;
+}
+
+.sidebar-company-filter-info:hover {
+  color: #d9e6ff;
+}
+
 .sidebar-company-filter-picker {
   position: relative;
   flex: 1;

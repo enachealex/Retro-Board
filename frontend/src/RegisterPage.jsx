@@ -24,7 +24,7 @@ export default function RegisterPage({ onGoToLogin }) {
   const [inviteToken, setInviteToken] = useState("");
   const [loadingInvite, setLoadingInvite] = useState(false);
   const [localError, setLocalError] = useState(null);
-  const [captcha, setCaptcha] = useState({ token: "", answer: "" });
+  const [captcha, setCaptcha] = useState({ token: "", answer: "", rememberDevice: false });
   const [captchaReloadKey, setCaptchaReloadKey] = useState(0);
   const [securityStep, setSecurityStep] = useState(false);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState("");
@@ -132,9 +132,25 @@ export default function RegisterPage({ onGoToLogin }) {
       return;
     }
 
-    setCaptcha({ token: "", answer: "" });
-    setCaptchaReloadKey((key) => key + 1);
-    setSecurityStep(true);
+    const trustAttempt = await register(firstName.trim(), lastName.trim(), email.trim(), password, company.trim(), inviteToken, null);
+    if (trustAttempt && typeof trustAttempt === "object" && (trustAttempt.emailVerificationRequired || trustAttempt.email)) {
+      setPendingVerificationEmail(trustAttempt.email || email.trim());
+      setManualVerificationUrl(trustAttempt.delivery === "manual" ? (trustAttempt.verificationUrl || "") : "");
+      setManualVerificationToken(trustAttempt.delivery === "manual" ? (trustAttempt.verificationToken || "") : "");
+      setShowManualToken(false);
+      setCopyMessage("");
+      setVerificationResendMessage("");
+      return;
+    }
+    if (trustAttempt?.failed) {
+      if (isCaptchaErrorMessage(trustAttempt.error)) {
+        setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
+        setCaptchaReloadKey((key) => key + 1);
+        setSecurityStep(true);
+      }
+      return;
+    }
+    if (!trustAttempt) return;
   };
 
   const handleSecuritySubmit = async (e) => {
@@ -155,18 +171,18 @@ export default function RegisterPage({ onGoToLogin }) {
       setCopyMessage("");
       setVerificationResendMessage("");
       setSecurityStep(false);
-      setCaptcha({ token: "", answer: "" });
+      setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
       return;
     }
     if (result?.failed) {
       if (isCaptchaErrorMessage(result.error)) {
         setLocalError(result.error || "Security check failed. Please try the new challenge.");
-        setCaptcha({ token: "", answer: "" });
+        setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
         setCaptchaReloadKey((key) => key + 1);
         return;
       }
       setSecurityStep(false);
-      setCaptcha({ token: "", answer: "" });
+      setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
       return;
     }
     if (!result) setCaptchaReloadKey((key) => key + 1);
@@ -212,7 +228,7 @@ export default function RegisterPage({ onGoToLogin }) {
 
   const handleSecurityBack = () => {
     setSecurityStep(false);
-    setCaptcha({ token: "", answer: "" });
+    setCaptcha((prev) => ({ token: "", answer: "", rememberDevice: !!prev?.rememberDevice }));
     clearErrors();
   };
 

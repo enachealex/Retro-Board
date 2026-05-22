@@ -246,6 +246,21 @@
   color: #c9372c;
 }
 
+.auth-captcha-remember {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  color: #44546f;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.auth-captcha-remember input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
 .auth-captcha-spin {
   animation: auth-captcha-spin 0.8s linear infinite;
 }
