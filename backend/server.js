@@ -1218,10 +1218,23 @@ const initDb = async () => {
                 UNIQUE KEY uniq_role_labels_company_role (company, role_key)
             )
         `);
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS role_label_permissions (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}',
+                role_key VARCHAR(50) NOT NULL,
+                permission_key VARCHAR(50) NOT NULL,
+                allowed TINYINT(1) NOT NULL DEFAULT 0,
+                UNIQUE KEY uniq_role_permission_company_role_key (company, role_key, permission_key)
+            )
+        `);
         try { await pool.query(`ALTER TABLE role_labels ADD COLUMN company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}' AFTER id`); } catch (e) { /* column already exists */ }
         try { await pool.query("UPDATE role_labels SET company = ? WHERE company IS NULL OR company = ''", [DEFAULT_COMPANY]); } catch (e) { /* ignore */ }
         try { await pool.query(`ALTER TABLE role_labels DROP INDEX role_key`); } catch (e) { /* old unique index may not exist */ }
         try { await pool.query(`ALTER TABLE role_labels ADD UNIQUE KEY uniq_role_labels_company_role (company, role_key)`); } catch (e) { /* unique key may already exist */ }
+        try { await pool.query(`ALTER TABLE role_label_permissions ADD COLUMN company VARCHAR(150) NOT NULL DEFAULT '${defaultCompanySql}' AFTER id`); } catch (e) { /* column already exists */ }
+        try { await pool.query("UPDATE role_label_permissions SET company = ? WHERE company IS NULL OR company = ''", [DEFAULT_COMPANY]); } catch (e) { /* ignore */ }
+        try { await pool.query(`ALTER TABLE role_label_permissions ADD UNIQUE KEY uniq_role_permission_company_role_key (company, role_key, permission_key)`); } catch (e) { /* unique key may already exist */ }
 
         // Seed defaults per company (INSERT IGNORE keeps existing customisations)
         const [companyRows] = await pool.query('SELECT name FROM companies ORDER BY name');
@@ -1232,6 +1245,17 @@ const initDb = async () => {
                  VALUES (?, 'master', 'Iron Fist'), (?, 'admin', 'Admin'), (?, 'user', 'Member')`,
                 [companyName, companyName, companyName]
             );
+            for (const roleKey of ['master', 'admin', 'user']) {
+                const defaults = getDefaultPermissionsForRole(roleKey);
+                for (const permissionKey of ROLE_PERMISSION_KEYS) {
+                    await pool.query(
+                        `INSERT INTO role_label_permissions (company, role_key, permission_key, allowed)
+                         VALUES (?, ?, ?, ?)
+                         ON DUPLICATE KEY UPDATE allowed = VALUES(allowed)`,
+                        [companyName, roleKey, permissionKey, defaults[permissionKey] ? 1 : 0]
+                    );
+                }
+            }
         }
 
         await pool.query(`
@@ -2197,10 +2221,10 @@ app.get('/api/companies', async (req, res) => {
     }
 });
 
-app.patch('/api/companies/:companyName', authMiddleware, async (req, res) => {
+const renameCompanyHandler = async (req, res, companyNameInput) => {
     if (!req.user.is_master) return res.status(403).json({ error: 'Access denied' });
 
-    const companyName = String(decodeURIComponent(req.params.companyName || '')).trim();
+    const companyName = String(decodeURIComponent(companyNameInput || '')).trim();
     const newName = String(req.body?.newName || '').trim();
 
     if (!companyName) return res.status(400).json({ error: 'Company name is required' });
@@ -2230,6 +2254,7 @@ app.patch('/api/companies/:companyName', authMiddleware, async (req, res) => {
         await connection.query('UPDATE users SET company = ? WHERE company = ?', [newName, companyName]);
         await connection.query('UPDATE boards SET company = ? WHERE company = ?', [newName, companyName]);
         await connection.query('UPDATE role_labels SET company = ? WHERE company = ?', [newName, companyName]);
+        await connection.query('UPDATE role_label_permissions SET company = ? WHERE company = ?', [newName, companyName]);
 
         await connection.commit();
         return res.json({ success: true, company: newName });
@@ -2242,6 +2267,18 @@ app.patch('/api/companies/:companyName', authMiddleware, async (req, res) => {
     } finally {
         if (connection) connection.release();
     }
+};
+
+app.post('/api/companies/rename', authMiddleware, async (req, res) => {
+    return renameCompanyHandler(req, res, req.body?.companyName);
+});
+
+app.patch('/api/companies/:companyName', authMiddleware, async (req, res) => {
+    return renameCompanyHandler(req, res, req.params.companyName);
+});
+
+app.put('/api/companies/:companyName', authMiddleware, async (req, res) => {
+    return renameCompanyHandler(req, res, req.params.companyName);
 });
 
 app.delete('/api/companies/:companyName', authMiddleware, async (req, res) => {
@@ -2265,6 +2302,7 @@ app.delete('/api/companies/:companyName', authMiddleware, async (req, res) => {
 
         await pool.query('DELETE FROM companies WHERE name = ?', [companyName]);
         await pool.query('DELETE FROM role_labels WHERE company = ?', [companyName]);
+        await pool.query('DELETE FROM role_label_permissions WHERE company = ?', [companyName]);
         res.json({ success: true });
     } catch (error) {
         if (error.status) return res.status(error.status).json({ error: error.message });
@@ -2804,6 +2842,56 @@ app.delete('/api/master-emails/:id', authMiddleware, adminMgmtLimiter, async (re
     }
 });
 
+const ROLE_PERMISSION_KEYS = [
+    'boards_create',
+    'boards_delete',
+    'users_manage',
+    'tags_manage',
+    'company_manage',
+];
+
+const DEFAULT_ROLE_PERMISSIONS = {
+    master: {
+        boards_create: true,
+        boards_delete: true,
+        users_manage: true,
+        tags_manage: true,
+        company_manage: true,
+    },
+    admin: {
+        boards_create: true,
+        boards_delete: true,
+        users_manage: false,
+        tags_manage: false,
+        company_manage: false,
+    },
+    user: {
+        boards_create: false,
+        boards_delete: false,
+        users_manage: false,
+        tags_manage: false,
+        company_manage: false,
+    },
+};
+
+function getDefaultPermissionsForRole(roleKey) {
+    const key = String(roleKey || '').trim().toLowerCase();
+    const defaults = DEFAULT_ROLE_PERMISSIONS[key] || DEFAULT_ROLE_PERMISSIONS.user;
+    return { ...defaults };
+}
+
+function sanitizeRolePermissions(input, roleKey) {
+    const defaults = getDefaultPermissionsForRole(roleKey);
+    const source = input && typeof input === 'object' ? input : {};
+    const output = { ...defaults };
+    for (const permissionKey of ROLE_PERMISSION_KEYS) {
+        if (source[permissionKey] !== undefined) {
+            output[permissionKey] = !!source[permissionKey];
+        }
+    }
+    return output;
+}
+
 // --- Role Label Routes ---
 
 app.get('/api/role-labels', async (req, res) => {
@@ -2830,6 +2918,63 @@ app.get('/api/role-labels', async (req, res) => {
         const labels = {};
         rows.forEach(r => { labels[r.role_key] = r.label; });
         res.json(labels);
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/role-label-permissions', authMiddleware, async (req, res) => {
+    if (!req.user.is_master) return res.status(403).json({ error: 'Only masters can view role permissions' });
+    try {
+        const selectedCompany = String(req.query?.company || '').trim();
+        const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
+        const [roleRows] = await pool.query('SELECT role_key FROM role_labels WHERE company = ? ORDER BY id ASC', [companyScope]);
+        const roleKeys = Array.from(new Set(roleRows.map(r => String(r.role_key || '').trim()).filter(Boolean)));
+        const permissionsByRole = {};
+
+        for (const roleKey of roleKeys) {
+            const defaults = getDefaultPermissionsForRole(roleKey);
+            const [rows] = await pool.query(
+                'SELECT permission_key, allowed FROM role_label_permissions WHERE company = ? AND role_key = ?',
+                [companyScope, roleKey]
+            );
+            const merged = { ...defaults };
+            rows.forEach((row) => {
+                if (ROLE_PERMISSION_KEYS.includes(row.permission_key)) {
+                    merged[row.permission_key] = Number(row.allowed || 0) === 1;
+                }
+            });
+            permissionsByRole[roleKey] = merged;
+        }
+
+        res.json({ permissionsByRole, keys: ROLE_PERMISSION_KEYS });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/role-label-permissions/:roleKey', authMiddleware, async (req, res) => {
+    if (!req.user.is_master) return res.status(403).json({ error: 'Only masters can edit role permissions' });
+    const roleKey = String(req.params?.roleKey || '').trim().toLowerCase();
+    if (!roleKey) return res.status(400).json({ error: 'roleKey required' });
+
+    try {
+        const selectedCompany = String(req.query?.company || req.body?.company || '').trim();
+        const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
+        const [existing] = await pool.query('SELECT id FROM role_labels WHERE company = ? AND role_key = ? LIMIT 1', [companyScope, roleKey]);
+        if (existing.length === 0) return res.status(404).json({ error: 'Role not found' });
+
+        const permissions = sanitizeRolePermissions(req.body?.permissions, roleKey);
+        for (const permissionKey of ROLE_PERMISSION_KEYS) {
+            await pool.query(
+                `INSERT INTO role_label_permissions (company, role_key, permission_key, allowed)
+                 VALUES (?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE allowed = VALUES(allowed)`,
+                [companyScope, roleKey, permissionKey, permissions[permissionKey] ? 1 : 0]
+            );
+        }
+
+        res.json({ success: true, roleKey, permissions });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -2875,6 +3020,15 @@ app.post('/api/role-labels', authMiddleware, async (req, res) => {
              ON DUPLICATE KEY UPDATE label = VALUES(label)`,
             [companyScope, key, label.trim()]
         );
+        const defaults = getDefaultPermissionsForRole(key);
+        for (const permissionKey of ROLE_PERMISSION_KEYS) {
+            await pool.query(
+                `INSERT INTO role_label_permissions (company, role_key, permission_key, allowed)
+                 VALUES (?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE allowed = VALUES(allowed)`,
+                [companyScope, key, permissionKey, defaults[permissionKey] ? 1 : 0]
+            );
+        }
         res.status(201).json({ role_key: key, label: label.trim() });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -2891,6 +3045,7 @@ app.delete('/api/role-labels/:key', authMiddleware, async (req, res) => {
         const selectedCompany = String(req.query?.company || '').trim();
         const companyScope = selectedCompany || req.user.company || DEFAULT_COMPANY;
         await pool.query('DELETE FROM role_labels WHERE company = ? AND role_key = ?', [companyScope, key]);
+        await pool.query('DELETE FROM role_label_permissions WHERE company = ? AND role_key = ?', [companyScope, key]);
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });

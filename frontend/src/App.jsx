@@ -369,10 +369,61 @@ const App = () => {
 
   // Role labels (configurable by masters)
   const DEFAULT_LABELS = { master: 'Iron Fist', admin: 'Admin', user: 'Member' };
+  const ROLE_PERMISSION_CATALOG = [
+    { key: 'boards_create', label: 'Create Boards' },
+    { key: 'boards_delete', label: 'Delete Boards' },
+    { key: 'users_manage', label: 'Manage Users' },
+    { key: 'tags_manage', label: 'Manage Role Labels' },
+    { key: 'company_manage', label: 'Manage Companies' },
+  ];
+
+  const DEFAULT_ROLE_PERMISSIONS = {
+    master: {
+      boards_create: true,
+      boards_delete: true,
+      users_manage: true,
+      tags_manage: true,
+      company_manage: true,
+    },
+    admin: {
+      boards_create: true,
+      boards_delete: true,
+      users_manage: false,
+      tags_manage: false,
+      company_manage: false,
+    },
+    user: {
+      boards_create: false,
+      boards_delete: false,
+      users_manage: false,
+      tags_manage: false,
+      company_manage: false,
+    },
+  };
+
+  const getDefaultRolePermissions = useCallback((roleKey) => {
+    const key = String(roleKey || '').trim().toLowerCase();
+    const base = DEFAULT_ROLE_PERMISSIONS[key] || DEFAULT_ROLE_PERMISSIONS.user;
+    return { ...base };
+  }, []);
+
+  const mergeRolePermissions = useCallback((roleKey, incoming) => {
+    const defaults = getDefaultRolePermissions(roleKey);
+    const merged = { ...defaults };
+    if (incoming && typeof incoming === 'object') {
+      ROLE_PERMISSION_CATALOG.forEach(({ key }) => {
+        if (incoming[key] !== undefined) merged[key] = !!incoming[key];
+      });
+    }
+    return merged;
+  }, [getDefaultRolePermissions]);
+
   const [roleLabels, setRoleLabels] = useState(DEFAULT_LABELS);
   const [editingLabels, setEditingLabels] = useState(null); // copy being edited
   const [newLabelKey, setNewLabelKey] = useState("");
   const [newLabelVal, setNewLabelVal] = useState("");
+  const [rolePermissionsByRole, setRolePermissionsByRole] = useState({});
+  const [permissionsModal, setPermissionsModal] = useState(null);
 
   const roleLabelParams = isSuperUser ? { company: effectiveCompanyFilter } : undefined;
 
@@ -386,6 +437,30 @@ const App = () => {
     } catch (e) { console.error("Error fetching role labels", e); }
   };
 
+  const fetchRoleLabelPermissions = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/role-label-permissions`, {
+        ...authHeaders(token),
+        params: roleLabelParams,
+      });
+      const incoming = res.data?.permissionsByRole && typeof res.data.permissionsByRole === 'object'
+        ? res.data.permissionsByRole
+        : {};
+      const merged = {};
+      Object.keys({ ...roleLabels, ...incoming }).forEach((roleKey) => {
+        merged[roleKey] = mergeRolePermissions(roleKey, incoming[roleKey]);
+      });
+      setRolePermissionsByRole(merged);
+    } catch (e) {
+      console.error("Error fetching role permissions", e);
+      const fallback = {};
+      Object.keys(roleLabels).forEach((roleKey) => {
+        fallback[roleKey] = getDefaultRolePermissions(roleKey);
+      });
+      setRolePermissionsByRole(fallback);
+    }
+  };
+
   const saveRoleLabels = async () => {
     try {
       await axios.put(`${API_URL}/role-labels`, { labels: editingLabels }, {
@@ -397,6 +472,45 @@ const App = () => {
     } catch (e) { console.error("Error saving role labels", e); }
   };
 
+  const openPermissionsModal = (roleKey) => {
+    setPermissionsModal({
+      roleKey,
+      draft: mergeRolePermissions(roleKey, rolePermissionsByRole[roleKey]),
+      saving: false,
+    });
+  };
+
+  const togglePermissionDraft = (permissionKey) => {
+    setPermissionsModal((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        draft: { ...prev.draft, [permissionKey]: !prev.draft[permissionKey] },
+      };
+    });
+  };
+
+  const saveRolePermissions = async () => {
+    if (!permissionsModal?.roleKey) return;
+    const roleKey = permissionsModal.roleKey;
+    const draft = mergeRolePermissions(roleKey, permissionsModal.draft);
+    setPermissionsModal((prev) => prev ? { ...prev, saving: true } : prev);
+    try {
+      await axios.put(`${API_URL}/role-label-permissions/${encodeURIComponent(roleKey)}`, {
+        permissions: draft,
+      }, {
+        ...authHeaders(token),
+        params: roleLabelParams,
+      });
+      setRolePermissionsByRole((prev) => ({ ...prev, [roleKey]: draft }));
+      setPermissionsModal(null);
+    } catch (e) {
+      console.error("Error saving role permissions", e);
+      alert(e.response?.data?.error || "Failed to save permissions");
+      setPermissionsModal((prev) => prev ? { ...prev, saving: false } : prev);
+    }
+  };
+
   const addRoleLabel = async () => {
     const key = newLabelKey.trim();
     const val = newLabelVal.trim();
@@ -406,8 +520,13 @@ const App = () => {
         ...authHeaders(token),
         params: roleLabelParams,
       });
-      const updated = { ...roleLabels, [key.toLowerCase().replace(/\s+/g, '_')]: val };
+      const normalizedKey = key.toLowerCase().replace(/\s+/g, '_');
+      const updated = { ...roleLabels, [normalizedKey]: val };
       setRoleLabels(updated);
+      setRolePermissionsByRole(prev => ({
+        ...prev,
+        [normalizedKey]: mergeRolePermissions(normalizedKey, prev[normalizedKey]),
+      }));
       setNewLabelKey(""); setNewLabelVal("");
     } catch (e) { console.error("Error adding role label", e); }
   };
@@ -419,6 +538,7 @@ const App = () => {
         params: roleLabelParams,
       });
       setRoleLabels(prev => { const n = { ...prev }; delete n[key]; return n; });
+      setRolePermissionsByRole(prev => { const n = { ...prev }; delete n[key]; return n; });
     } catch (e) { console.error("Error deleting role label", e); }
   };
 
@@ -511,11 +631,21 @@ const App = () => {
     }
 
     try {
-      await axios.patch(
-        `${API_URL}/companies/${encodeURIComponent(currentName)}`,
-        { newName: nextName },
-        authHeaders(token)
-      );
+      try {
+        await axios.post(
+          `${API_URL}/companies/rename`,
+          { companyName: currentName, newName: nextName },
+          authHeaders(token)
+        );
+      } catch (primaryError) {
+        // Backward compatibility for older deployments that only expose PATCH.
+        if (primaryError?.response?.status !== 404) throw primaryError;
+        await axios.patch(
+          `${API_URL}/companies/${encodeURIComponent(currentName)}`,
+          { newName: nextName },
+          authHeaders(token)
+        );
+      }
       if (effectiveCompanyFilter === currentName) {
         setMasterCompanyFilter(nextName);
       }
@@ -1277,7 +1407,18 @@ const App = () => {
   useEffect(() => {
     if (!token) return;
     fetchRoleLabels();
+    fetchRoleLabelPermissions();
   }, [token, effectiveCompanyFilter, isSuperUser]);
+
+  useEffect(() => {
+    setPermissionsModal(null);
+  }, [effectiveCompanyFilter]);
+
+  useEffect(() => {
+    if (!companyDropdownOpen && contextMenu?.type === "company") {
+      setContextMenu(null);
+    }
+  }, [companyDropdownOpen, contextMenu]);
 
   useEffect(() => {
     if (!activeBoard?.id) {
@@ -2677,7 +2818,13 @@ const App = () => {
                     className="sidebar-company-filter-trigger"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setCompanyDropdownOpen(prev => !prev);
+                      setCompanyDropdownOpen(prev => {
+                        const next = !prev;
+                        if (!next && contextMenu?.type === "company") {
+                          setContextMenu(null);
+                        }
+                        return next;
+                      });
                     }}
                   >
                     <span className="sidebar-company-filter-value">{effectiveCompanyFilter}</span>
@@ -2706,6 +2853,9 @@ const App = () => {
                               title="Right-click for actions"
                               onClick={() => {
                                 setMasterCompanyFilter(name);
+                                if (contextMenu?.type === "company") {
+                                  setContextMenu(null);
+                                }
                                 setCompanyDropdownOpen(false);
                               }}
                               onContextMenu={(e) => {
@@ -3012,6 +3162,13 @@ const App = () => {
                           value={val}
                           onChange={e => setEditingLabels(prev => ({ ...prev, [key]: e.target.value }))}
                         />
+                        <button
+                          className="label-permissions-btn"
+                          onClick={() => openPermissionsModal(key)}
+                          title="Edit permissions"
+                        >
+                          Permissions
+                        </button>
                         {!['master','admin','user'].includes(key) && (
                           <button className="label-delete-btn" onClick={() => { deleteRoleLabel(key); setEditingLabels(prev => { const n = { ...prev }; delete n[key]; return n; }); }} title="Remove">
                             <X size={12} />
@@ -3390,6 +3547,44 @@ const App = () => {
                   </button>
                 </>
               )}
+            </div>
+          )}
+
+          {permissionsModal && (
+            <div className="permissions-modal-overlay" onClick={() => setPermissionsModal(null)}>
+              <div className="permissions-modal" onClick={(e) => e.stopPropagation()}>
+                <div className="permissions-modal-title">Permissions: {roleLabels[permissionsModal.roleKey] || permissionsModal.roleKey}</div>
+                <div className="permissions-modal-subtitle">Role key: {permissionsModal.roleKey}</div>
+                <div className="permissions-list">
+                  {ROLE_PERMISSION_CATALOG.map((permission) => (
+                    <label key={permission.key} className="permissions-item">
+                      <input
+                        type="checkbox"
+                        checked={!!permissionsModal.draft?.[permission.key]}
+                        onChange={() => togglePermissionDraft(permission.key)}
+                        disabled={permissionsModal.saving}
+                      />
+                      <span>{permission.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="permissions-modal-actions">
+                  <button
+                    className="label-save-btn"
+                    onClick={saveRolePermissions}
+                    disabled={permissionsModal.saving}
+                  >
+                    {permissionsModal.saving ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    className="label-cancel-btn"
+                    onClick={() => setPermissionsModal(null)}
+                    disabled={permissionsModal.saving}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

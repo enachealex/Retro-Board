@@ -3851,6 +3851,77 @@ body.dark-theme .gif-library-item-delete {
   align-items: center;
 }
 
+.label-permissions-btn {
+  background: rgba(0, 163, 255, 0.2);
+  border: 1px solid rgba(0, 163, 255, 0.45);
+  border-radius: 4px;
+  color: #b9e7ff;
+  cursor: pointer;
+  padding: 3px 7px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.label-permissions-btn:hover {
+  background: rgba(0, 163, 255, 0.32);
+}
+
+.permissions-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 30, 66, 0.58);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9998;
+}
+
+.permissions-modal {
+  width: min(440px, calc(100vw - 24px));
+  background: #0a1a4a;
+  border: 1px solid rgba(163, 194, 255, 0.3);
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.permissions-modal-title {
+  font-size: 0.96rem;
+  color: #e8f3ff;
+  font-weight: 700;
+}
+
+.permissions-modal-subtitle {
+  font-size: 0.74rem;
+  color: rgba(163, 194, 255, 0.78);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.permissions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.permissions-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #d9e7ff;
+  font-size: 0.84rem;
+}
+
+.permissions-modal-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .label-delete-btn:hover { background: rgba(220,50,50,0.45); }
 
 .label-save-btn {

@@ -1022,6 +1022,17 @@ const initDb = async () => {
         `);
 
         await pool.request().query(`
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'role_label_permissions')
+            CREATE TABLE role_label_permissions (
+                id INT IDENTITY(1,1) PRIMARY KEY,
+                role_key NVARCHAR(50) NOT NULL,
+                permission_key NVARCHAR(50) NOT NULL,
+                allowed BIT NOT NULL DEFAULT 0,
+                CONSTRAINT UQ_role_label_permissions UNIQUE (role_key, permission_key)
+            )
+        `);
+
+        await pool.request().query(`
             IF COL_LENGTH('users', 'email_verified_at') IS NULL
                 ALTER TABLE users ADD email_verified_at DATETIME2 NULL
         `);
@@ -1095,6 +1106,23 @@ const initDb = async () => {
                     .input('role', sql.NVarChar(50), 'master_emails')
                     .query(`IF NOT EXISTS (SELECT 1 FROM role_seed_state WHERE role_key = @role) INSERT INTO role_seed_state (role_key) VALUES (@role)`);
         await reloadMasterEmails();
+
+        for (const roleKey of ['master', 'admin', 'user']) {
+            const defaults = getDefaultPermissionsForRole(roleKey);
+            for (const permissionKey of ROLE_PERMISSION_KEYS) {
+                await pool.request()
+                    .input('roleKey', sql.NVarChar(50), roleKey)
+                    .input('permissionKey', sql.NVarChar(50), permissionKey)
+                    .input('allowed', sql.Bit, defaults[permissionKey] ? 1 : 0)
+                    .query(`
+                        MERGE role_label_permissions AS target
+                        USING (SELECT @roleKey AS role_key, @permissionKey AS permission_key, @allowed AS allowed) AS source
+                        ON target.role_key = source.role_key AND target.permission_key = source.permission_key
+                        WHEN MATCHED THEN UPDATE SET allowed = source.allowed
+                        WHEN NOT MATCHED THEN INSERT (role_key, permission_key, allowed) VALUES (source.role_key, source.permission_key, source.allowed);
+                    `);
+            }
+        }
 
         // Seed overlord emails
         for (const e of DEFAULT_OVERLORD_EMAILS) {
@@ -2472,6 +2500,56 @@ app.delete('/api/master-emails/:id', authMiddleware, async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
+const ROLE_PERMISSION_KEYS = [
+    'boards_create',
+    'boards_delete',
+    'users_manage',
+    'tags_manage',
+    'company_manage',
+];
+
+const DEFAULT_ROLE_PERMISSIONS = {
+    master: {
+        boards_create: true,
+        boards_delete: true,
+        users_manage: true,
+        tags_manage: true,
+        company_manage: true,
+    },
+    admin: {
+        boards_create: true,
+        boards_delete: true,
+        users_manage: false,
+        tags_manage: false,
+        company_manage: false,
+    },
+    user: {
+        boards_create: false,
+        boards_delete: false,
+        users_manage: false,
+        tags_manage: false,
+        company_manage: false,
+    },
+};
+
+function getDefaultPermissionsForRole(roleKey) {
+    const key = String(roleKey || '').trim().toLowerCase();
+    const defaults = DEFAULT_ROLE_PERMISSIONS[key] || DEFAULT_ROLE_PERMISSIONS.user;
+    return { ...defaults };
+}
+
+function sanitizeRolePermissions(input, roleKey) {
+    const defaults = getDefaultPermissionsForRole(roleKey);
+    const source = input && typeof input === 'object' ? input : {};
+    const output = { ...defaults };
+    for (const permissionKey of ROLE_PERMISSION_KEYS) {
+        if (source[permissionKey] !== undefined) {
+            output[permissionKey] = !!source[permissionKey];
+        }
+    }
+    return output;
+}
+
 // =====================================================================
 // ROLE LABELS
 // =====================================================================
@@ -2483,6 +2561,65 @@ app.get('/api/role-labels', async (req, res) => {
         result.recordset.forEach(r => { labels[r.role_key] = r.label; });
         res.json(labels);
     } catch (error) { res.status(500).json({ error: error.message }); }
+});
+
+app.get('/api/role-label-permissions', authMiddleware, async (req, res) => {
+    if (!req.user.is_overlord && !req.user.is_master) return res.status(403).json({ error: 'Only masters can view role permissions' });
+    try {
+        const roleResult = await pool.request().query('SELECT role_key FROM role_labels ORDER BY id ASC');
+        const roleKeys = Array.from(new Set(roleResult.recordset.map(r => String(r.role_key || '').trim()).filter(Boolean)));
+        const permissionsByRole = {};
+
+        for (const roleKey of roleKeys) {
+            const defaults = getDefaultPermissionsForRole(roleKey);
+            const rows = await pool.request()
+                .input('roleKey', sql.NVarChar(50), roleKey)
+                .query('SELECT permission_key, allowed FROM role_label_permissions WHERE role_key = @roleKey');
+            const merged = { ...defaults };
+            rows.recordset.forEach((row) => {
+                if (ROLE_PERMISSION_KEYS.includes(row.permission_key)) {
+                    merged[row.permission_key] = !!row.allowed;
+                }
+            });
+            permissionsByRole[roleKey] = merged;
+        }
+
+        res.json({ permissionsByRole, keys: ROLE_PERMISSION_KEYS });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.put('/api/role-label-permissions/:roleKey', authMiddleware, async (req, res) => {
+    if (!req.user.is_overlord && !req.user.is_master) return res.status(403).json({ error: 'Only masters can edit role permissions' });
+    const roleKey = String(req.params?.roleKey || '').trim().toLowerCase();
+    if (!roleKey) return res.status(400).json({ error: 'roleKey required' });
+
+    try {
+        const existing = await pool.request()
+            .input('roleKey', sql.NVarChar(50), roleKey)
+            .query('SELECT id FROM role_labels WHERE role_key = @roleKey');
+        if (!existing.recordset.length) return res.status(404).json({ error: 'Role not found' });
+
+        const permissions = sanitizeRolePermissions(req.body?.permissions, roleKey);
+        for (const permissionKey of ROLE_PERMISSION_KEYS) {
+            await pool.request()
+                .input('roleKey', sql.NVarChar(50), roleKey)
+                .input('permissionKey', sql.NVarChar(50), permissionKey)
+                .input('allowed', sql.Bit, permissions[permissionKey] ? 1 : 0)
+                .query(`
+                    MERGE role_label_permissions AS target
+                    USING (SELECT @roleKey AS role_key, @permissionKey AS permission_key, @allowed AS allowed) AS source
+                    ON target.role_key = source.role_key AND target.permission_key = source.permission_key
+                    WHEN MATCHED THEN UPDATE SET allowed = source.allowed
+                    WHEN NOT MATCHED THEN INSERT (role_key, permission_key, allowed) VALUES (source.role_key, source.permission_key, source.allowed);
+                `);
+        }
+
+        res.json({ success: true, roleKey, permissions });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.put('/api/role-labels', authMiddleware, async (req, res) => {
@@ -2520,6 +2657,20 @@ app.post('/api/role-labels', authMiddleware, async (req, res) => {
                 WHEN MATCHED THEN UPDATE SET label = source.label
                 WHEN NOT MATCHED THEN INSERT (role_key, label) VALUES (source.role_key, source.label);
             `);
+        const defaults = getDefaultPermissionsForRole(key);
+        for (const permissionKey of ROLE_PERMISSION_KEYS) {
+            await pool.request()
+                .input('roleKey', sql.NVarChar(50), key)
+                .input('permissionKey', sql.NVarChar(50), permissionKey)
+                .input('allowed', sql.Bit, defaults[permissionKey] ? 1 : 0)
+                .query(`
+                    MERGE role_label_permissions AS target
+                    USING (SELECT @roleKey AS role_key, @permissionKey AS permission_key, @allowed AS allowed) AS source
+                    ON target.role_key = source.role_key AND target.permission_key = source.permission_key
+                    WHEN MATCHED THEN UPDATE SET allowed = source.allowed
+                    WHEN NOT MATCHED THEN INSERT (role_key, permission_key, allowed) VALUES (source.role_key, source.permission_key, source.allowed);
+                `);
+        }
         res.status(201).json({ role_key: key, label: label.trim() });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
@@ -2530,6 +2681,7 @@ app.delete('/api/role-labels/:key', authMiddleware, async (req, res) => {
     if (['master', 'admin', 'user'].includes(key)) return res.status(400).json({ error: 'Cannot delete built-in role labels' });
     try {
         await pool.request().input('key', sql.NVarChar(50), key).query('DELETE FROM role_labels WHERE role_key = @key');
+        await pool.request().input('key', sql.NVarChar(50), key).query('DELETE FROM role_label_permissions WHERE role_key = @key');
         res.json({ success: true });
     } catch (error) { res.status(500).json({ error: error.message }); }
 });

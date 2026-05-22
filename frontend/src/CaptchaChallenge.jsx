@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { getAuthUrl } from "./config";
 
@@ -6,6 +6,11 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const rememberDevice = !!value?.rememberDevice;
+  const rememberDeviceRef = useRef(rememberDevice);
+
+  useEffect(() => {
+    rememberDeviceRef.current = rememberDevice;
+  }, [rememberDevice]);
 
   const loadChallenge = useCallback(async () => {
     setLoading(true);
@@ -17,15 +22,15 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
         token: res.data?.token || "",
         answer: "",
         image: res.data?.image || "",
-        rememberDevice,
+        rememberDevice: rememberDeviceRef.current,
       });
     } catch {
-      onChange({ type: "text-captcha", token: "", answer: "", image: "", rememberDevice });
+      onChange({ type: "text-captcha", token: "", answer: "", image: "", rememberDevice: rememberDeviceRef.current });
       setError("Could not load security challenge. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, [onChange, rememberDevice]);
+  }, [onChange]);
 
   useEffect(() => {
     loadChallenge();

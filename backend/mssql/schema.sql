@@ -108,6 +108,16 @@ CREATE TABLE admin_emails (
     CONSTRAINT CK_admin_dept CHECK (department IS NULL OR department IN ('QA','SE','SDET'))
 );
 
+-- 6b. Role Label Permissions
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'role_label_permissions')
+CREATE TABLE role_label_permissions (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    role_key NVARCHAR(50) NOT NULL,
+    permission_key NVARCHAR(50) NOT NULL,
+    allowed BIT NOT NULL DEFAULT 0,
+    CONSTRAINT UQ_role_label_permissions UNIQUE (role_key, permission_key)
+);
+
 -- 7. Master Emails
 IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'master_emails')
 CREATE TABLE master_emails (
