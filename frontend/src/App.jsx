@@ -841,11 +841,6 @@ const App = () => {
   const showConfirm = (message, onConfirm) => setConfirmDialog({ message, onConfirm });
   const [settingsMsg, setSettingsMsg] = useState(null); // { type: 'success'|'error', text }
 
-  useEscapeClose(showSettings, () => setShowSettings(false));
-  useEscapeClose(isModalOpen, () => setIsModalOpen(false));
-  useEscapeClose(showGifPicker, () => { setShowGifPicker(false); setGifPickerContext(null); });
-  useEscapeClose(!!confirmDialog, () => setConfirmDialog(null));
-
   const openSettings = () => {
     setSettingsFirstName(""); setSettingsLastName("");
     setSettingsCurPw(""); setSettingsNewPw(""); setSettingsConfirmPw("");
@@ -938,6 +933,11 @@ const App = () => {
   const [reactionPickerCardId, setReactionPickerCardId] = useState(null);
   const [reactionPickerPos, setReactionPickerPos] = useState(null);
   const REACTION_EMOJIS = ['👍', '👎', '❤️', '😂', '🎉', '🚀', '🔥', '👀', '💯'];
+
+  useEscapeClose(showSettings, () => setShowSettings(false));
+  useEscapeClose(isModalOpen, () => setIsModalOpen(false));
+  useEscapeClose(showGifPicker, () => { setShowGifPicker(false); setGifPickerContext(null); });
+  useEscapeClose(!!confirmDialog, () => setConfirmDialog(null));
 
   // --- GIF Library Functions ---
   const fetchGifs = useCallback(async (search = '', page = 1, filter = 'all') => {
