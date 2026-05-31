@@ -235,7 +235,7 @@ export default function RegisterPage({ onGoToLogin }) {
 
   if (pendingVerificationEmail) {
     return (
-      <div className="auth-screen">
+      <main className="auth-screen" id="main-content">
         <div className="auth-card">
           <div className="auth-logo">
             <img
@@ -309,13 +309,13 @@ export default function RegisterPage({ onGoToLogin }) {
             Back to Sign In
           </button>
         </div>
-      </div>
+      </main>
     );
   }
 
   if (securityStep) {
     return (
-      <div className="auth-screen">
+      <main className="auth-screen" id="main-content">
         <div className="auth-card">
           <div className="auth-logo">
             <img
@@ -360,12 +360,12 @@ export default function RegisterPage({ onGoToLogin }) {
             </button>
           </form>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="auth-screen">
+    <main className="auth-screen" id="main-content">
       <div className="auth-card">
         <div className="auth-logo">
           <img
@@ -483,7 +483,6 @@ export default function RegisterPage({ onGoToLogin }) {
                 type="button"
                 className="auth-pw-toggle"
                 onClick={() => setShowPassword(v => !v)}
-                tabIndex={-1}
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -507,7 +506,6 @@ export default function RegisterPage({ onGoToLogin }) {
                 type="button"
                 className="auth-pw-toggle"
                 onClick={() => setShowConfirmPassword(v => !v)}
-                tabIndex={-1}
                 aria-label={showConfirmPassword ? "Hide password" : "Show password"}
               >
                 {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -531,7 +529,7 @@ export default function RegisterPage({ onGoToLogin }) {
           </button>
         </p>
       </div>
-    </div>
+    </main>
   );
 }
 

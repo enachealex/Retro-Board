@@ -93,7 +93,8 @@ body.dark-theme {
   background-color: rgba(255, 255, 255, 0.25);
 }
 
-.sidebar-collapse-strip {
+.sidebar-collapse-strip,
+.sidebar-expand-btn {
   width: 28px;
   flex-shrink: 0;
   display: flex;
@@ -101,10 +102,19 @@ body.dark-theme {
   justify-content: center;
   cursor: pointer;
   transition: background-color 0.15s;
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.sidebar-collapse-strip {
   border-left: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.sidebar-collapse-strip:hover {
+.sidebar-collapse-strip:hover,
+.sidebar-expand-btn:hover {
   background-color: rgba(255, 255, 255, 0.15);
 }
 

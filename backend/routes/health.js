@@ -1,8 +1,9 @@
 const { buildHealthReport } = require('../lib/health');
 
-function registerHealthRoutes(app, { pool, port }) {
+function registerHealthRoutes(app, { getPool, port }) {
     app.get('/api/health', async (req, res) => {
         try {
+            const pool = typeof getPool === 'function' ? getPool() : getPool;
             const detailed = String(req.query?.detailed || '') === '1';
             const report = await buildHealthReport({
                 pool,

@@ -1,6 +1,7 @@
 import React, { StrictMode, useState, useEffect, Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
+import './a11y.css'
 import { AuthProvider, useAuth } from './AuthContext.jsx'
 import { initConnection } from './config.js'
 import { APP_NAME } from './branding.js'

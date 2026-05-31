@@ -431,6 +431,11 @@
   font-size: 0.9rem;
 }
 
+.auth-btn-primary:focus-visible {
+  outline: 3px solid #00a3ff;
+  outline-offset: 2px;
+}
+
 .auth-btn-secondary {
   padding: 12px 13px;
   background: #ffffff;

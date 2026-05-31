@@ -8,6 +8,7 @@ import "./App.css";
 import { useAuth } from "./AuthContext";
 import { getApiUrl, getSocketUrl, DEFAULT_COMPANY } from "./config";
 import { APP_NAME } from "./branding";
+import { useEscapeClose } from "./utils/a11y";
 
 const API_URL = getApiUrl();
 
@@ -839,6 +840,11 @@ const App = () => {
   const [confirmDialog, setConfirmDialog] = useState(null);
   const showConfirm = (message, onConfirm) => setConfirmDialog({ message, onConfirm });
   const [settingsMsg, setSettingsMsg] = useState(null); // { type: 'success'|'error', text }
+
+  useEscapeClose(showSettings, () => setShowSettings(false));
+  useEscapeClose(isModalOpen, () => setIsModalOpen(false));
+  useEscapeClose(showGifPicker, () => { setShowGifPicker(false); setGifPickerContext(null); });
+  useEscapeClose(!!confirmDialog, () => setConfirmDialog(null));
 
   const openSettings = () => {
     setSettingsFirstName(""); setSettingsLastName("");
@@ -2092,12 +2098,13 @@ const App = () => {
     return (
       <ErrorBoundary>
         <div className="app-container">
+          <a href="#main-board" className="skip-to-main">Skip to board</a>
 
           {/* Confirm Dialog */}
           {confirmDialog && (
-            <div className="confirm-overlay" onClick={() => setConfirmDialog(null)}>
-              <div className="confirm-dialog" onClick={e => e.stopPropagation()}>
-                <p className="confirm-message">{confirmDialog.message}</p>
+            <div className="confirm-overlay" onClick={() => setConfirmDialog(null)} role="presentation">
+              <div className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-message" onClick={e => e.stopPropagation()}>
+                <p id="confirm-dialog-message" className="confirm-message">{confirmDialog.message}</p>
                 <div className="confirm-actions">
                   <button className="confirm-yes" onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }}>Yes</button>
                   <button className="confirm-cancel" onClick={() => setConfirmDialog(null)}>Cancel</button>
@@ -2320,7 +2327,7 @@ const App = () => {
                     <button className="gif-manage-btn" title="Add your own GIFs" onClick={() => { setShowGifPicker(false); setGifPickerContext(null); openGifLibrary(); }}>
                       <Plus size={14} />
                     </button>
-                    <button className="settings-close" onClick={() => { setShowGifPicker(false); setGifPickerContext(null); }}><X size={16} /></button>
+                    <button type="button" className="settings-close" aria-label="Close GIF picker" onClick={() => { setShowGifPicker(false); setGifPickerContext(null); }}><X size={16} aria-hidden="true" /></button>
                   </div>
                 </div>
                 <div className="gif-picker-search">
@@ -2486,11 +2493,11 @@ const App = () => {
 
           {/* Settings Modal */}
           {showSettings && (
-            <div className="settings-overlay" onClick={() => setShowSettings(false)}>
-              <div className="settings-modal" onClick={e => e.stopPropagation()}>
+            <div className="settings-overlay" onClick={() => setShowSettings(false)} role="presentation">
+              <div className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" onClick={e => e.stopPropagation()}>
                 <div className="settings-header">
-                  <h2>Settings</h2>
-                  <button className="settings-close" onClick={() => setShowSettings(false)}><X size={18} /></button>
+                  <h2 id="settings-modal-title">Settings</h2>
+                  <button type="button" className="settings-close" aria-label="Close settings" onClick={() => setShowSettings(false)}><X size={18} aria-hidden="true" /></button>
                 </div>
 
                 {settingsMsg && (
@@ -2686,21 +2693,25 @@ const App = () => {
 
           {/* Create Board Modal */}
           {isModalOpen && (
-            <div className="modal-overlay">
-              <div className="modal-content">
+            <div className="modal-overlay" role="presentation">
+              <div className="modal-content" role="dialog" aria-modal="true" aria-labelledby="create-board-title">
                 <div className="modal-header">
-                  <h2>Create a New Board</h2>
+                  <h2 id="create-board-title">Create a New Board</h2>
                   {boards.length > 0 && (
                     <button
+                      type="button"
                       className="close-modal"
+                      aria-label="Close create board dialog"
                       onClick={() => setIsModalOpen(false)}
                     >
-                      <X size={20} />
+                      <X size={20} aria-hidden="true" />
                     </button>
                   )}
                 </div>
                 <div className="modal-body">
+                  <label htmlFor="new-board-name" className="sr-only">Board name</label>
                   <input
+                    id="new-board-name"
                     type="text"
                     autoFocus
                     value={newBoardName}
@@ -2742,15 +2753,16 @@ const App = () => {
 
           <div className={`sidebar${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
             style={!sidebarCollapsed ? { width: sidebarWidth } : undefined}
-            {...(sidebarCollapsed ? {
-              onClick: () => { setSidebarCollapsed(false); localStorage.setItem("retro_sidebar_collapsed", "false"); },
-              title: "Expand sidebar",
-              role: "button",
-              tabIndex: 0,
-            } : {})}
           >
             {sidebarCollapsed ? (
-              <ChevronRight size={20} className="sidebar-expand-icon" />
+              <button
+                type="button"
+                className="sidebar-expand-btn"
+                onClick={() => { setSidebarCollapsed(false); localStorage.setItem("retro_sidebar_collapsed", "false"); }}
+                aria-label="Expand sidebar"
+              >
+                <ChevronRight size={20} className="sidebar-expand-icon" aria-hidden="true" />
+              </button>
             ) : (
             <>
             <div className="sidebar-content">
@@ -2759,11 +2771,14 @@ const App = () => {
               <div className="sidebar-actions">
                 <div className="font-size-wrapper">
                   <button
+                    type="button"
                     className="theme-toggle-btn"
                     onClick={(e) => { e.stopPropagation(); setShowFontSlider(!showFontSlider); }}
                     title="Adjust font size"
+                    aria-label="Adjust sidebar font size"
+                    aria-expanded={showFontSlider}
                   >
-                    <span style={{ fontWeight: 700, fontSize: 12 }}>A</span>
+                    <span style={{ fontWeight: 700, fontSize: 12 }} aria-hidden="true">A</span>
                   </button>
                   {showFontSlider && (
                     <div className="font-slider-popup" onClick={(e) => e.stopPropagation()}
@@ -2775,6 +2790,7 @@ const App = () => {
                         max={150}
                         step={5}
                         value={sidebarFontSize}
+                        aria-label="Sidebar font size"
                         onChange={(e) => {
                           const val = parseInt(e.target.value);
                           setSidebarFontSize(val);
@@ -2786,11 +2802,13 @@ const App = () => {
                   )}
                 </div>
                 <button
+                  type="button"
                   className="theme-toggle-btn"
                   onClick={() => setIsDarkTheme(!isDarkTheme)}
-                  title="Toggle Dark Theme"
+                  title="Toggle dark theme"
+                  aria-label={isDarkTheme ? "Switch to light theme" : "Switch to dark theme"}
                 >
-                  {isDarkTheme ? <Sun size={16} /> : <Moon size={16} />}
+                  {isDarkTheme ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
                 </button>
                 {sidebarPanel === "boards" && (
                   <button
@@ -3245,15 +3263,14 @@ const App = () => {
               </div>
             )}
             </div>
-            <div
+            <button
+              type="button"
               className="sidebar-collapse-strip"
               onClick={() => { setSidebarCollapsed(true); localStorage.setItem("retro_sidebar_collapsed", "true"); }}
-              title="Collapse sidebar"
-              role="button"
-              tabIndex={0}
+              aria-label="Collapse sidebar"
             >
-              <ChevronLeft size={18} className="sidebar-expand-icon" />
-            </div>
+              <ChevronLeft size={18} className="sidebar-expand-icon" aria-hidden="true" />
+            </button>
             </>
             )}
             {!sidebarCollapsed && (
@@ -3600,7 +3617,7 @@ const App = () => {
             </div>
           )}
 
-          <div className="board-area" style={activeBoard?.bg_image ? { position: 'relative', overflow: 'hidden', backgroundColor: 'transparent' } : {}}>
+          <main id="main-board" className="board-area" tabIndex={-1} aria-label="Retro board workspace" style={activeBoard?.bg_image ? { position: 'relative', overflow: 'hidden', backgroundColor: 'transparent' } : {}}>
             {activeBoard?.bg_image && (
               <>
                 {/* Blurred background fill — covers edges without stretching the real image */}
@@ -4275,7 +4292,7 @@ const App = () => {
                 </DragDropContext>
               </>
             )}
-          </div>
+          </main>
         </div>
       </ErrorBoundary>
     );

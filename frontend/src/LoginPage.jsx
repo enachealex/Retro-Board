@@ -282,7 +282,7 @@ export default function LoginPage({ onGoToRegister }) {
 
   if (forceUpdate) {
     return (
-      <div className="auth-screen">
+      <main className="auth-screen" id="main-content">
         <div className="auth-card">
           <div className="auth-logo">
               <img
@@ -312,7 +312,7 @@ export default function LoginPage({ onGoToRegister }) {
                   onChange={(e) => { setNewPassword(e.target.value); setUpdateError(null); }}
                   disabled={updating}
                 />
-                <button type="button" className="auth-pw-toggle" onClick={() => setShowNew(v => !v)} tabIndex={-1}>
+                <button type="button" className="auth-pw-toggle" onClick={() => setShowNew(v => !v)} >
                   {showNew ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
@@ -329,7 +329,7 @@ export default function LoginPage({ onGoToRegister }) {
                   onChange={(e) => { setConfirmNew(e.target.value); setUpdateError(null); }}
                   disabled={updating}
                 />
-                <button type="button" className="auth-pw-toggle" onClick={() => setShowConfirmNew(v => !v)} tabIndex={-1}>
+                <button type="button" className="auth-pw-toggle" onClick={() => setShowConfirmNew(v => !v)} >
                   {showConfirmNew ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
@@ -344,13 +344,13 @@ export default function LoginPage({ onGoToRegister }) {
             </button>
           </form>
         </div>
-      </div>
+      </main>
     );
   }
 
   if (verifyToken) {
     return (
-      <div className="auth-screen">
+      <main className="auth-screen" id="main-content">
         <div className="auth-card">
           <div className="auth-logo">
             <img
@@ -395,13 +395,13 @@ export default function LoginPage({ onGoToRegister }) {
             <button type="button" className="auth-btn-primary" onClick={() => setVerifyToken("")}>Sign In</button>
           )}
         </div>
-      </div>
+      </main>
     );
   }
 
   if (resetToken) {
     return (
-      <div className="auth-screen">
+      <main className="auth-screen" id="main-content">
         <div className="auth-card">
           <div className="auth-logo">
             <img
@@ -450,13 +450,13 @@ export default function LoginPage({ onGoToRegister }) {
             </button>
           </form>
         </div>
-      </div>
+      </main>
     );
   }
 
   if (securityStep) {
     return (
-      <div className="auth-screen">
+      <main className="auth-screen" id="main-content">
         <div className="auth-card">
           <div className="auth-logo">
             <img
@@ -501,12 +501,12 @@ export default function LoginPage({ onGoToRegister }) {
             </button>
           </form>
         </div>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="auth-screen">
+    <main className="auth-screen" id="main-content">
       <div className="auth-card">
         <div className="auth-logo">
             <img
@@ -570,7 +570,6 @@ export default function LoginPage({ onGoToRegister }) {
                 type="button"
                 className="auth-pw-toggle"
                 onClick={() => setShowPassword(v => !v)}
-                tabIndex={-1}
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
                 {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -650,6 +649,6 @@ export default function LoginPage({ onGoToRegister }) {
           </button>
         </p>
       </div>
-    </div>
+    </main>
   );
 }

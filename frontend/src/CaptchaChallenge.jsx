@@ -120,8 +120,8 @@ export default function CaptchaChallenge({ value, onChange, disabled, reloadKey 
 
   if (provider === "hcaptcha") {
     return (
-      <div className="auth-field auth-captcha-field">
-        <label>Security Check</label>
+      <div className="auth-field auth-captcha-field" role="group" aria-labelledby="captcha-label-hcaptcha">
+        <label id="captcha-label-hcaptcha">Security Check</label>
         <div className="auth-captcha-box auth-captcha-hcaptcha">
           {siteKey ? (
             <HCaptcha

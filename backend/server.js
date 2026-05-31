@@ -2864,7 +2864,7 @@ function sanitizeRolePermissions(input, roleKey) {
 }
 
 // --- Health (public, for monitors and uptime checks) ---
-registerHealthRoutes(app, { pool, port: PORT });
+registerHealthRoutes(app, { getPool: () => pool, port: PORT });
 
 // --- Role Label Routes ---
 
