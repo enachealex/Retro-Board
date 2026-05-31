@@ -8,7 +8,7 @@ function createWindow () {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: 'Vault Jump Retro',
+    title: 'Jump Vault Retro',
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: true

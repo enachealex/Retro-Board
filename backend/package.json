@@ -6,7 +6,12 @@
     "start": "node server.js",
     "start:mssql": "node server-mssql.js",
     "migrate": "node mssql/migrate-mysql-to-mssql.js",
-    "smoke:e2e": "node smoke/e2e-smoke.js"
+    "smoke:e2e": "node smoke/e2e-smoke.js",
+    "ops:backup": "node scripts/backup-mysql.js",
+    "ops:health-report": "node scripts/weekly-health-report.js",
+    "ops:health-ping": "node scripts/ping-health.js",
+    "ops:issue-alert": "node scripts/issue-alert-monitor.js",
+    "ops:sample-email": "node scripts/send-sample-email.js"
   },
   "dependencies": {
     "compression": "^1.8.1",

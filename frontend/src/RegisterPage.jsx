@@ -2,7 +2,8 @@ import React, { useState, useEffect } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuth } from "./AuthContext";
 import { getApiUrl } from "./config";
-import CaptchaChallenge from "./CaptchaChallenge";
+import CaptchaChallenge, { isCaptchaComplete } from "./CaptchaChallenge";
+import { APP_NAME } from "./branding";
 import axios from "axios";
 import "./Auth.css";
 
@@ -157,7 +158,7 @@ export default function RegisterPage({ onGoToLogin }) {
     e.preventDefault();
     clearErrors();
 
-    if (!captcha.token || !captcha.answer.trim()) {
+    if (!isCaptchaComplete(captcha)) {
       setLocalError("Complete the security check.");
       return;
     }
@@ -240,9 +241,9 @@ export default function RegisterPage({ onGoToLogin }) {
             <img
               className="auth-logo-image"
               src="/vault-jump.png"
-              alt="Vault Jump Retro logo"
+              alt={`${APP_NAME} logo`}
             />
-            <span className="auth-logo-text">Vault Jump Retro</span>
+            <span className="auth-logo-text">{APP_NAME}</span>
           </div>
           <h2 className="auth-title">Check Your Email</h2>
           <p className="auth-subtitle">Confirm your account before signing in.</p>
@@ -320,9 +321,9 @@ export default function RegisterPage({ onGoToLogin }) {
             <img
               className="auth-logo-image"
               src="/vault-jump.png"
-              alt="Vault Jump Retro logo"
+              alt={`${APP_NAME} logo`}
             />
-            <span className="auth-logo-text">Vault Jump Retro</span>
+            <span className="auth-logo-text">{APP_NAME}</span>
           </div>
           <h2 className="auth-title">Security Check</h2>
           <p className="auth-subtitle">Complete the check to create your account.</p>
@@ -344,7 +345,7 @@ export default function RegisterPage({ onGoToLogin }) {
             <button
               type="submit"
               className="auth-btn-primary"
-              disabled={authLoading || !captcha.token || !captcha.answer.trim()}
+              disabled={authLoading || !isCaptchaComplete(captcha)}
             >
               {authLoading ? "Creating account…" : "Create Account"}
             </button>
@@ -370,9 +371,9 @@ export default function RegisterPage({ onGoToLogin }) {
           <img
             className="auth-logo-image"
             src="/vault-jump.png"
-            alt="Vault Jump Retro logo"
+            alt={`${APP_NAME} logo`}
           />
-          <span className="auth-logo-text">Vault Jump Retro</span>
+          <span className="auth-logo-text">{APP_NAME}</span>
         </div>
         <h2 className="auth-title">Create your account</h2>
         <p className="auth-subtitle">{inviteToken ? "Join your board from an invite link" : "Create your Retro Boards account"}</p>

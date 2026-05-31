@@ -7,6 +7,7 @@ import { Trash2, Plus, GripVertical, X, Edit2, Check, Moon, Sun, User, Users, Se
 import "./App.css";
 import { useAuth } from "./AuthContext";
 import { getApiUrl, getSocketUrl, DEFAULT_COMPANY } from "./config";
+import { APP_NAME } from "./branding";
 
 const API_URL = getApiUrl();
 
@@ -82,7 +83,7 @@ class ErrorBoundary extends React.Component {
 }
 
 const App = () => {
-  const { user, token, logout, updateUser } = useAuth();
+  const { user, token, logout, logoutAllDevices, updateUser } = useAuth();
   const isAdmin = user?.is_admin === true;
   const isMaster = user?.is_master === true;
   const isOverlord = user?.is_overlord === true;
@@ -2754,7 +2755,7 @@ const App = () => {
             <>
             <div className="sidebar-content">
             <div className="sidebar-header">
-              <h2>{sidebarPanel === "users" ? "Users" : "Vault Jump Retro"}</h2>
+              <h2>{sidebarPanel === "users" ? "Users" : APP_NAME}</h2>
               <div className="sidebar-actions">
                 <div className="font-size-wrapper">
                   <button
@@ -3836,8 +3837,15 @@ const App = () => {
                         <button onClick={openSettings}>
                           <Settings size={16} /> Settings
                         </button>
-                        <button onClick={() => { setIsProfileOpen(false); alert("Vault Jump Retro v1.0\nBuilt with React + Vite"); }}>
+                        <button onClick={() => { setIsProfileOpen(false); alert(`${APP_NAME} v1.0\nBuilt with React + Vite`); }}>
                           <Info size={16} /> About
+                        </button>
+                        <button onClick={async () => {
+                          setIsProfileOpen(false);
+                          const result = await logoutAllDevices();
+                          if (result?.ok) alert("Signed out on all devices. Sign in again to continue.");
+                        }}>
+                          <LogOut size={16} /> Sign Out Everywhere
                         </button>
                         <hr className="profile-dropdown-divider" />
                         <button className="profile-logout-btn" onClick={() => { setIsProfileOpen(false); logout(); }}>

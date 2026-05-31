@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { APP_NAME, COMPANY_NAME, emailFromAddress } = require('./branding');
 
 const emailTransporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp-mail.outlook.com',
@@ -8,8 +9,7 @@ const emailTransporter = nodemailer.createTransport({
     tls: process.env.SMTP_INSECURE_TLS === 'true' ? { rejectUnauthorized: false } : undefined
 });
 
-const EMAIL_FROM = process.env.SMTP_FROM
-    || (process.env.SMTP_USER ? `"Vault Jump Retro" <${process.env.SMTP_USER}>` : '"Vault Jump Retro" <no-reply@thejumpvault.com>');
+const EMAIL_FROM = emailFromAddress(process.env.SMTP_USER);
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -27,7 +27,7 @@ async function sendWelcomeEmail(firstName, email) {
         await emailTransporter.sendMail({
           from: EMAIL_FROM,
             to: email,
-            subject: 'Welcome to Vault Jump Retro!',
+            subject: `Welcome to ${APP_NAME}!`,
             html: `
 <!DOCTYPE html>
 <html>
@@ -36,7 +36,7 @@ async function sendWelcomeEmail(firstName, email) {
   <tr><td align="center">
     <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
       <tr><td style="background:#001489;padding:28px 36px;">
-        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
+        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; ${APP_NAME}</span>
       </td></tr>
       <tr><td style="padding:36px;">
         <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Welcome, ${safeFirstName}!</h1>
@@ -45,7 +45,7 @@ async function sendWelcomeEmail(firstName, email) {
         <p style="color:#888;font-size:13px;margin:0;">If you didn't create this account, please contact your team administrator.</p>
       </td></tr>
       <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-        <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span>
+        <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} ${COMPANY_NAME}. All rights reserved.</span>
       </td></tr>
     </table>
   </td></tr>

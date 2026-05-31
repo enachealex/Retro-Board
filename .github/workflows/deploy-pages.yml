@@ -37,7 +37,11 @@ jobs:
         run: npm run build
         working-directory: frontend
         env:
-          VITE_API_BASE_URL: https://api.thejumpvault.com
+          # Use same host as the app when DNS points at the tunnel (see docs/CLOUDFLARE-FREE.md).
+          # If you keep GitHub Pages + api subdomain, set this to https://api.thejumpvault.com
+          # and remove Cloudflare Access on that hostname (free to delete).
+          VITE_API_BASE_URL: https://retroboard.thejumpvault.com
+          VITE_HCAPTCHA_SITE_KEY: 7f02f2f0-347c-46aa-a026-61ae184ef028
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

@@ -24,7 +24,7 @@ const transporter = nodemailer.createTransport({
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
 });
 
-const EMAIL_FROM = process.env.SMTP_FROM || '"Vault Jump Retro" <no-reply@thejumpvault.com>';
+const EMAIL_FROM = process.env.SMTP_FROM || '"Jump Vault Retro" <no-reply@thejumpvault.com>';
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -49,11 +49,11 @@ function verificationHtml(firstName, email, verificationUrl, expiresInHours) {
     <tr><td align="center">
         <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
             <tr><td style="background:#001489;padding:28px 36px;">
-                <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
+                <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Jump Vault Retro</span>
             </td></tr>
             <tr><td style="padding:36px;">
                 <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Confirm your email</h1>
-                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 18px;">Hi ${safeFirstName}, confirm this email address to finish creating your Vault Jump Retro account.</p>
+                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 18px;">Hi ${safeFirstName}, confirm this email address to finish creating your Jump Vault Retro account.</p>
                 <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 24px;">Account email: <strong>${safeEmail}</strong></p>
                 <p style="margin:0 0 28px;"><a href="${safeUrl}" style="display:inline-block;background:#001489;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:600;">Confirm Email</a></p>
                 <p style="color:#666;font-size:13px;line-height:1.5;margin:0 0 12px;">This link expires in ${expiresInHours} hours. If the button does not work, paste this link into your browser:</p>
@@ -61,7 +61,7 @@ function verificationHtml(firstName, email, verificationUrl, expiresInHours) {
                 <p style="color:#888;font-size:13px;margin:0;">If you did not create this account, you can ignore this email.</p>
             </td></tr>
             <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span>
+                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span>
             </td></tr>
         </table>
     </td></tr>
@@ -81,7 +81,7 @@ function welcomeHtml(firstName, email) {
   <tr><td align="center">
     <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
       <tr><td style="background:#001489;padding:28px 36px;">
-        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
+        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Jump Vault Retro</span>
       </td></tr>
       <tr><td style="padding:36px;">
         <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Welcome, ${safeFirstName}!</h1>
@@ -90,7 +90,7 @@ function welcomeHtml(firstName, email) {
         <p style="color:#888;font-size:13px;margin:0;">If you didn't create this account, please contact your team administrator.</p>
       </td></tr>
       <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-        <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span>
+        <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span>
       </td></tr>
     </table>
   </td></tr>
@@ -110,7 +110,7 @@ function resetHtml(email, resetUrl, expiryMinutes) {
     <tr><td align="center">
         <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
             <tr><td style="background:#001489;padding:28px 36px;">
-                <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
+                <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Jump Vault Retro</span>
             </td></tr>
             <tr><td style="padding:36px;">
                 <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Password reset requested</h1>
@@ -122,7 +122,7 @@ function resetHtml(email, resetUrl, expiryMinutes) {
                 <p style="color:#888;font-size:13px;margin:0;">If you did not request this, you can ignore this email.</p>
             </td></tr>
             <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span>
+                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span>
             </td></tr>
         </table>
     </td></tr>
@@ -142,13 +142,13 @@ async function sendOne(subject, html) {
     const mockResetUrl = 'https://retroboard.thejumpvault.com/?reset=PREVIEW-RESET-1234567890';
     try {
         if (type === 'all' || type === 'verify') {
-            await sendOne('Confirm your Vault Jump Retro account', verificationHtml('Alex', recipient, mockUrl, 48));
+            await sendOne('Confirm your Jump Vault Retro account', verificationHtml('Alex', recipient, mockUrl, 48));
         }
         if (type === 'all' || type === 'welcome') {
-            await sendOne('Welcome to Vault Jump Retro!', welcomeHtml('Alex', recipient));
+            await sendOne('Welcome to Jump Vault Retro!', welcomeHtml('Alex', recipient));
         }
         if (type === 'all' || type === 'reset') {
-            await sendOne('Reset your Vault Jump Retro password', resetHtml(recipient, mockResetUrl, 30));
+            await sendOne('Reset your Jump Vault Retro password', resetHtml(recipient, mockResetUrl, 30));
         }
         console.log('Done.');
     } catch (err) {

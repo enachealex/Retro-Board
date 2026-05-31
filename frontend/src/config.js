@@ -33,6 +33,10 @@ let _resolvedBase = null;
 
 function getBaseUrl() {
   if (_resolvedBase) return _resolvedBase;
+  if (typeof window !== 'undefined' && STATIC_SITE_HOSTS.has(window.location.hostname)) {
+    _resolvedBase = window.location.origin;
+    return _resolvedBase;
+  }
   if (VITE_API_BASE_URL) {
     try {
       const parsed = new URL(VITE_API_BASE_URL);
@@ -56,15 +60,32 @@ function getBaseUrl() {
 
 // Async check: try server API first, then HTTP, then localhost
 export async function initConnection() {
-  if (VITE_API_BASE_URL) {
-    _resolvedBase = VITE_API_BASE_URL;
+  if (!isElectron && typeof window !== 'undefined' && STATIC_SITE_HOSTS.has(window.location.hostname)) {
+    _resolvedBase = window.location.origin;
     return;
+  }
+  if (VITE_API_BASE_URL) {
+    try {
+      const parsed = new URL(VITE_API_BASE_URL);
+      if (!STATIC_SITE_HOSTS.has(parsed.hostname)) {
+        _resolvedBase = VITE_API_BASE_URL;
+        return;
+      }
+    } catch {
+      // fall through
+    }
   }
   if (isViteDevRuntime) {
     _resolvedBase = '';
     return;
   }
   if (!isElectron && typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    // Same-origin when app and API are served from retroboard.thejumpvault.com (free tunnel setup).
+    if (host === 'retroboard.thejumpvault.com') {
+      _resolvedBase = window.location.origin;
+      return;
+    }
     _resolvedBase = SERVER_BASE_SSL;
     return;
   }

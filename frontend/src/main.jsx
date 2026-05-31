@@ -1,11 +1,13 @@
-import React, { StrictMode, useState, useEffect } from 'react'
+import React, { StrictMode, useState, useEffect, Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import App from './App.jsx'
 import { AuthProvider, useAuth } from './AuthContext.jsx'
-import LoginPage from './LoginPage.jsx'
-import RegisterPage from './RegisterPage.jsx'
 import { initConnection } from './config.js'
+import { APP_NAME } from './branding.js'
+
+const App = lazy(() => import('./App.jsx'))
+const LoginPage = lazy(() => import('./LoginPage.jsx'))
+const RegisterPage = lazy(() => import('./RegisterPage.jsx'))
 
 class ErrorBoundary extends React.Component {
   constructor(props) {
@@ -37,40 +39,53 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+function AuthLoading() {
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#444' }}>
+      Loading {APP_NAME}…
+    </div>
+  );
+}
+
 function AuthGate() {
   const { isAuthenticated, token } = useAuth();
-  const [view, setView] = useState('login'); // 'login' | 'register'
+  const [view, setView] = useState('login');
 
   useEffect(() => {
-    document.title = 'Vault Jump Retro';
+    document.title = APP_NAME;
   }, []);
 
-  // Reveal the root div now that React has determined what to show
   useEffect(() => {
     const root = document.getElementById('root');
     if (root) root.style.visibility = 'visible';
   }, []);
 
-  // Always return to login screen when the user signs out
   useEffect(() => {
     if (!isAuthenticated && !token) setView('login');
   }, [isAuthenticated, token]);
 
-  // Trust the token from localStorage — if it exists, show the app immediately.
-  // The background /me check will kick back to login if it's actually expired.
   if (token) {
-    return <App />;
+    return (
+      <Suspense fallback={<AuthLoading />}>
+        <App />
+      </Suspense>
+    );
   }
 
   if (view === 'register') {
-    return <RegisterPage onGoToLogin={() => setView('login')} />;
+    return (
+      <Suspense fallback={<AuthLoading />}>
+        <RegisterPage onGoToLogin={() => setView('login')} />
+      </Suspense>
+    );
   }
-  return <LoginPage onGoToRegister={() => setView('register')} />;
+  return (
+    <Suspense fallback={<AuthLoading />}>
+      <LoginPage onGoToRegister={() => setView('register')} />
+    </Suspense>
+  );
 }
 
-// Render immediately — don't block on server detection.
-// initConnection runs in parallel and updates the resolved URL;
-// the first API call will use the correct URL.
 initConnection();
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -81,4 +96,3 @@ createRoot(document.getElementById('root')).render(
     </ErrorBoundary>
   </StrictMode>,
 )
-

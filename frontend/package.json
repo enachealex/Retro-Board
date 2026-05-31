@@ -31,6 +31,7 @@
     }
   },
   "dependencies": {
+    "@hcaptcha/react-hcaptcha": "^2.0.2",
     "@hello-pangea/dnd": "^18.0.1",
     "axios": "^1.13.6",
     "lucide-react": "^0.577.0",

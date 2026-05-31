@@ -6,6 +6,9 @@ node_modules/
 .env.local
 .env.*.local
 
+# Local agent notes (may contain server credentials)
+.github/agents/
+
 # Build output
 dist/
 dist-ssr/
@@ -14,6 +17,11 @@ build/
 # SSL certificates and private keys
 backend/certs/*.key
 backend/certs/*.pem
+
+# Ops artifacts (generated on server)
+backend/backups/
+backend/logs/
+backend/logs/security-events.jsonl
 
 # Logs
 *.log

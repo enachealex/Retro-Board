@@ -15,6 +15,23 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 require('dotenv').config();
 const { DEFAULT_COMPANY, VALID_DEPARTMENTS, LEADS_BY_DEPT, LEAD_DEFAULT_COLUMNS, DEFAULT_ADMIN_EMAILS, DEFAULT_ADMIN_EMAILS_RAW, DEFAULT_MASTER_EMAILS, GIPHY_API_KEY } = require('./config/constants');
+const { buildAllowedOrigins, createCorsOptions } = require('./config/cors');
+const { buildHealthReport } = require('./lib/health');
+const { recordSecurityEvent } = require('./lib/security-event-log');
+const { queueLoginFailureAlert } = require('./lib/login-alert-mail');
+const { hcaptchaConfigured, getHcaptchaSiteKey, verifyHcaptchaResponse } = require('./lib/hcaptcha');
+const { APP_NAME, COMPANY_NAME, emailFromAddress } = require('./config/branding');
+const { recordAuditEvent } = require('./lib/audit-log');
+const { buildUserPublic, buildUserToken } = require('./auth/tokens');
+const { createAuthenticateMiddleware } = require('./middleware/authenticate');
+const { registerHealthRoutes } = require('./routes/health');
+const {
+    normalizeAuthUserId,
+    verifyJwtDetailed,
+    tokenErrorMessage,
+    hashPassword,
+    verifyPassword,
+} = require('./auth/session');
 
 // --- SSL Configuration ---
 const SSL_KEY_PATH = path.join(__dirname, 'certs', 'server.key');
@@ -39,8 +56,7 @@ const emailTransporter = nodemailer.createTransport({
     tls: SMTP_INSECURE_TLS ? { rejectUnauthorized: false } : undefined
 });
 
-const EMAIL_FROM = process.env.SMTP_FROM
-    || (process.env.SMTP_USER ? `"Vault Jump Retro" <${process.env.SMTP_USER}>` : '"Vault Jump Retro" <no-reply@thejumpvault.com>');
+const EMAIL_FROM = emailFromAddress(process.env.SMTP_USER);
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -77,7 +93,7 @@ async function sendWelcomeEmail(firstName, email) {
         await emailTransporter.sendMail({
             from: EMAIL_FROM,
             to: email,
-            subject: 'Welcome to Vault Jump Retro!',
+            subject: `Welcome to ${APP_NAME}!`,
             html: `
 <!DOCTYPE html>
 <html>
@@ -86,7 +102,7 @@ async function sendWelcomeEmail(firstName, email) {
   <tr><td align="center">
     <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
       <tr><td style="background:#001489;padding:28px 36px;">
-        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
+        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; ${APP_NAME}</span>
       </td></tr>
       <tr><td style="padding:36px;">
             <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Welcome, ${safeFirstName}!</h1>
@@ -95,7 +111,7 @@ async function sendWelcomeEmail(firstName, email) {
         <p style="color:#888;font-size:13px;margin:0;">If you didn't create this account, please contact your team administrator.</p>
       </td></tr>
       <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-        <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span>
+        <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} ${COMPANY_NAME}. All rights reserved.</span>
       </td></tr>
     </table>
   </td></tr>
@@ -116,7 +132,7 @@ async function sendEmailVerificationEmail(firstName, email, verificationUrl, exp
     await emailTransporter.sendMail({
     from: EMAIL_FROM,
     to: email,
-    subject: 'Confirm your Vault Jump Retro account',
+    subject: `Confirm your ${APP_NAME} account`,
     html: `
 <!DOCTYPE html>
 <html>
@@ -125,11 +141,11 @@ async function sendEmailVerificationEmail(firstName, email, verificationUrl, exp
     <tr><td align="center">
         <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
             <tr><td style="background:#001489;padding:28px 36px;">
-                <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
+                <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; ${APP_NAME}</span>
             </td></tr>
             <tr><td style="padding:36px;">
                 <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Confirm your email</h1>
-                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 18px;">Hi ${safeFirstName}, confirm this email address to finish creating your Vault Jump Retro account.</p>
+                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 18px;">Hi ${safeFirstName}, confirm this email address to finish creating your ${APP_NAME} account.</p>
                 <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 24px;">Account email: <strong>${safeEmail}</strong></p>
                 <p style="margin:0 0 28px;"><a href="${safeUrl}" style="display:inline-block;background:#001489;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:600;">Confirm Email</a></p>
                 <p style="color:#666;font-size:13px;line-height:1.5;margin:0 0 12px;">This link expires in ${expiresInHours} hours. If the button does not work, paste this link into your browser:</p>
@@ -137,7 +153,7 @@ async function sendEmailVerificationEmail(firstName, email, verificationUrl, exp
                 <p style="color:#888;font-size:13px;margin:0;">If you did not create this account, you can ignore this email.</p>
             </td></tr>
             <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span>
+                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} ${COMPANY_NAME}. All rights reserved.</span>
             </td></tr>
         </table>
     </td></tr>
@@ -154,7 +170,7 @@ async function sendPasswordResetEmail(email, resetUrl) {
         await emailTransporter.sendMail({
             from: EMAIL_FROM,
             to: email,
-            subject: 'Reset your Vault Jump Retro password',
+            subject: `Reset your ${APP_NAME} password`,
             html: `
 <!DOCTYPE html>
 <html>
@@ -163,7 +179,7 @@ async function sendPasswordResetEmail(email, resetUrl) {
     <tr><td align="center">
         <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
             <tr><td style="background:#001489;padding:28px 36px;">
-                <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
+                <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; ${APP_NAME}</span>
             </td></tr>
             <tr><td style="padding:36px;">
                 <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Password reset requested</h1>
@@ -175,7 +191,7 @@ async function sendPasswordResetEmail(email, resetUrl) {
                 <p style="color:#888;font-size:13px;margin:0;">If you did not request this, you can ignore this email.</p>
             </td></tr>
             <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span>
+                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} ${COMPANY_NAME}. All rights reserved.</span>
             </td></tr>
         </table>
     </td></tr>
@@ -233,7 +249,6 @@ if (process.env.JWT_SECRET.length < 32) {
     process.exit(1);
 }
 const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_EXPIRY = '7d';
 const RESET_TOKEN_EXPIRY_MINUTES = Number.parseInt(process.env.RESET_TOKEN_EXPIRY_MINUTES || '30', 10);
 const EMAIL_VERIFICATION_EXPIRY_HOURS = Number.parseInt(process.env.EMAIL_VERIFICATION_EXPIRY_HOURS || '48', 10);
 
@@ -328,46 +343,14 @@ async function getOrCreateDailyBoardInviteLink(boardId, inviterUserId) {
     return { token, expiresAt };
 }
 
-function buildUserToken(user) {
-    return jwt.sign({
-        sub: user.id,
-        username: user.username,
-        first_name: user.first_name || '',
-        last_name: user.last_name || '',
-        display_name: user.display_name,
-        email: user.email,
-        company: user.company || '',
-        department: user.department,
-        lead: user.lead || null,
-        email_verified: !!user.email_verified_at,
-        is_admin: user.is_admin === 1 || user.is_admin === true,
-        is_master: user.is_master === 1 || user.is_master === true,
-    }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
-}
-function buildUserPublic(user) {
-    return {
-        id: user.id,
-        username: user.username,
-        first_name: user.first_name || '',
-        last_name: user.last_name || '',
-        display_name: user.display_name,
-        email: user.email,
-        company: user.company || '',
-        department: user.department,
-        lead: user.lead || null,
-        email_verified: !!user.email_verified_at,
-        is_admin: user.is_admin === 1 || user.is_admin === true,
-        is_master: user.is_master === 1 || user.is_master === true
-    };
-}
 function verifyJwt(token) {
-    try {
-        return jwt.verify(token, JWT_SECRET);
-    } catch { return null; }
+    return verifyJwtDetailed(token, JWT_SECRET).payload;
 }
 async function getCurrentUserForAuth(userId) {
+    const normalizedId = normalizeAuthUserId(userId);
+    if (!normalizedId) return null;
     const [rows] = await pool.query(
-        `SELECT u.id, u.username, u.first_name, u.last_name, u.display_name, u.email, u.company, u.department, u.\`lead\`, u.email_verified_at, u.is_admin, u.is_master,
+        `SELECT u.id, u.username, u.first_name, u.last_name, u.display_name, u.email, u.company, u.department, u.\`lead\`, u.email_verified_at, u.is_admin, u.is_master, u.session_version,
                 CASE WHEN me.email IS NULL THEN 0 ELSE 1 END AS listed_master,
                 CASE WHEN ae.email IS NULL THEN 0 ELSE 1 END AS listed_admin
          FROM users u
@@ -375,7 +358,7 @@ async function getCurrentUserForAuth(userId) {
          LEFT JOIN admin_emails ae ON LOWER(ae.email) = LOWER(u.email)
          WHERE u.id = ?
          LIMIT 1`,
-        [userId]
+        [normalizedId]
     );
     const user = rows[0];
     if (!user) return null;
@@ -394,29 +377,6 @@ async function getCurrentUserForAuth(userId) {
     delete user.listed_admin;
     return user;
 }
-async function hashPassword(password) {
-    const salt = crypto.randomBytes(16).toString('hex');
-    return new Promise((resolve, reject) => {
-        crypto.scrypt(password, salt, 64, (err, derived) => {
-            if (err) reject(err);
-            else resolve(`${salt}:${derived.toString('hex')}`);
-        });
-    });
-}
-async function verifyPassword(password, stored) {
-    const [salt, hash] = stored.split(':');
-    return new Promise((resolve, reject) => {
-        crypto.scrypt(password, salt, 64, (err, derived) => {
-            if (err) reject(err);
-            else {
-                try {
-                    resolve(crypto.timingSafeEqual(Buffer.from(hash, 'hex'), derived));
-                } catch { resolve(false); }
-            }
-        });
-    });
-}
-
 const CAPTCHA_TTL_MS = Number.parseInt(process.env.CAPTCHA_TTL_MS || '120000', 10);
 const CAPTCHA_LENGTH = 6;
 const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -652,6 +612,12 @@ function renderCaptchaSvg(code) {
 }
 
 function createCaptchaChallenge() {
+    if (hcaptchaConfigured()) {
+        return {
+            provider: 'hcaptcha',
+            siteKey: getHcaptchaSiteKey(),
+        };
+    }
     cleanupCaptchaNonces();
     const code = createCaptchaCode();
     const nonce = createRandomToken(18);
@@ -662,12 +628,22 @@ function createCaptchaChallenge() {
         expiresAt,
         answerHash: createCaptchaAnswerHash(nonce, expiresAt, code),
     });
-    return { token, image: renderCaptchaSvg(code), expiresAt, expiresInSeconds: Math.floor(CAPTCHA_TTL_MS / 1000) };
+    return {
+        provider: 'text-captcha',
+        token,
+        image: renderCaptchaSvg(code),
+        expiresAt,
+        expiresInSeconds: Math.floor(CAPTCHA_TTL_MS / 1000),
+    };
 }
 
-function verifyCaptchaOrThrow(captcha, options = {}) {
+async function verifyCaptchaOrThrow(captcha, options = {}) {
     if (captcha?.type === 'landing-pads' || captcha?.type === 'landing-pads-session') {
         verifyLandingPadsOrThrow(captcha, options);
+        return;
+    }
+    if (captcha?.type === 'hcaptcha' || hcaptchaConfigured()) {
+        await verifyHcaptchaResponse(captcha?.token, options.remoteip);
         return;
     }
 
@@ -706,30 +682,8 @@ function verifyCaptchaOrThrow(captcha, options = {}) {
         throw err;
     }
 }
-async function authMiddleware(req, res, next) {
-    const authHeader = req.headers['authorization'];
-    if (!authHeader?.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-    const payload = verifyJwt(authHeader.slice(7));
-    if (!payload) return res.status(401).json({ error: 'Invalid or expired token' });
-
-    try {
-        const currentUser = await getCurrentUserForAuth(payload.sub);
-        if (!currentUser) return res.status(401).json({ error: 'User no longer exists' });
-        if (!currentUser.email_verified_at) return res.status(403).json({ error: 'Please confirm your email before continuing.' });
-        req.user = {
-            ...payload,
-            ...buildUserPublic(currentUser),
-            sub: currentUser.id,
-            id: currentUser.id,
-        };
-    } catch (error) {
-        console.error('Auth refresh error:', error);
-        return res.status(500).json({ error: 'Internal server error' });
-    }
-    next();
-}
+let _authMiddleware = (req, res, next) => res.status(503).json({ error: 'Server is starting. Try again shortly.' });
+const authMiddleware = (req, res, next) => _authMiddleware(req, res, next);
 
 const PORT = process.env.PORT || 5000;
 
@@ -762,31 +716,19 @@ async function createPool() {
 
 let pool;
 
-// --- CORS Origins ---
+// --- CORS (RetroBoard app origins only; main marketing site is intentionally excluded) ---
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const REQUIRED_PUBLIC_ORIGINS = [
-        'https://retroboard.thejumpvault.com',
-    'https://enachealex.github.io',
-        'https://thejumpvault.com',
-        'https://www.thejumpvault.com',
-];
-
-const CORS_ORIGINS = Array.from(new Set([
-        ...(process.env.CORS_ORIGINS
-                ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
-                : NODE_ENV === 'production'
-                    ? (() => { console.error('FATAL: CORS_ORIGINS must be set in production. Exiting.'); process.exit(1); })()
-                    : [
-                            'http://localhost:5173', 'http://localhost:5000', 'https://localhost:5443',
-                            'http://192.168.1.48', 'http://192.168.1.48:5000', 'https://192.168.1.48:5443',
-                        ]),
-        ...REQUIRED_PUBLIC_ORIGINS,
-]));
-
-const corsOptions = { origin: CORS_ORIGINS, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] };
+const CORS_ORIGINS = buildAllowedOrigins({ nodeEnv: NODE_ENV });
+console.info(`[startup] CORS allowlist: ${CORS_ORIGINS.join(', ')}`);
+const corsOptions = createCorsOptions(CORS_ORIGINS, (origin) => {
+    console.info('[SECURITY]', JSON.stringify({ ts: new Date().toISOString(), type: 'cors_rejected', origin }));
+});
 
 // --- Express + Socket.io Setup ---
 const app = express();
+if (process.env.TRUST_PROXY === 'true' || process.env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+}
 const server = http.createServer(app);
 
 // Tune HTTP keep-alive to reduce connection overhead
@@ -855,6 +797,11 @@ function logSecurityEvent(type, details = {}, level = 'warn') {
     else if (level === 'info') console.info(line);
     else console.warn(line);
 
+    recordSecurityEvent(event);
+    if (event.type === 'auth_login_failed' || event.type === 'auth_login_denied') {
+        queueLoginFailureAlert(event);
+    }
+
     if (SECURITY_ALERT_WEBHOOK_URL && (level === 'error' || details.alert === true)) {
         void sendSecurityAlert(event);
     }
@@ -908,18 +855,18 @@ io.use(async (socket, next) => {
             return next(new Error('Unauthorized'));
         }
 
-        const payload = verifyJwt(token);
+        const { payload, errorCode } = verifyJwtDetailed(token, JWT_SECRET);
         if (!payload) {
             logSecurityEvent('socket_auth_failed', {
                 alert: true,
-                reason: 'invalid_token',
+                reason: errorCode || 'invalid_token',
                 socketId: socket.id,
                 ip: socket.handshake?.address || 'unknown',
             });
             return next(new Error('Unauthorized'));
         }
 
-        const currentUser = await getCurrentUserForAuth(payload.sub);
+        const currentUser = await getCurrentUserForAuth(normalizeAuthUserId(payload.sub));
         if (!currentUser || !currentUser.email_verified_at) {
             logSecurityEvent('socket_auth_failed', {
                 alert: true,
@@ -950,17 +897,23 @@ io.use(async (socket, next) => {
 });
 
 app.use(cors(corsOptions));
+const CSP_HCAPTCHA = [
+    'https://hcaptcha.com',
+    'https://*.hcaptcha.com',
+    'https://js.hcaptcha.com',
+    'https://newassets.hcaptcha.com',
+];
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'"],
-            imgSrc: ["'self'", 'data:', 'blob:', 'https://*.giphy.com', 'https://media*.giphy.com'],
-            connectSrc: ["'self'", ...CORS_ORIGINS, 'wss:', 'ws:'],
-            fontSrc: ["'self'", 'data:'],
+            scriptSrc: ["'self'", ...CSP_HCAPTCHA],
+            styleSrc: ["'self'", "'unsafe-inline'", ...CSP_HCAPTCHA],
+            imgSrc: ["'self'", 'data:', 'blob:', 'https://*.giphy.com'],
+            connectSrc: ["'self'", ...CORS_ORIGINS, ...CSP_HCAPTCHA, 'wss:', 'ws:'],
+            fontSrc: ["'self'", 'data:', ...CSP_HCAPTCHA],
             objectSrc: ["'none'"],
-            frameSrc: ["'none'"],
+            frameSrc: ["'self'", ...CSP_HCAPTCHA],
             baseUri: ["'self'"],
             formAction: ["'self'"],
         },
@@ -1102,6 +1055,7 @@ const initDb = async () => {
         try { await pool.query(`UPDATE users SET department = 'QA' WHERE department IN ('OWS','Apex')`); } catch (e) { /* ignore */ }
         // Add role_key for custom role label assignments
         try { await pool.query(`ALTER TABLE users ADD COLUMN role_key VARCHAR(50) DEFAULT NULL AFTER is_master`); } catch (e) { /* column already exists */ }
+        try { await pool.query(`ALTER TABLE users ADD COLUMN session_version INT NOT NULL DEFAULT 0 AFTER role_key`); } catch (e) { /* column already exists */ }
 
         // company lookup table used by registration dropdown
         await pool.query(`
@@ -1341,33 +1295,6 @@ const initDb = async () => {
                     await pool.query('INSERT INTO `columns` (board_id, name, position) VALUES (?, ?, ?)', [boardId, LEAD_DEFAULT_COLUMNS[i], i]);
                 }
                 console.log(`Restored default columns for board: ${boardName}`);
-            }
-        }
-
-        // Pre-create placeholder user accounts for all leads so they appear in /api/leads before registering
-        for (const lead of allLeads) {
-            const [nameParts] = [lead.name.split(' ')];
-            const firstName = nameParts[0];
-            const lastName = nameParts.slice(1).join(' ');
-            // Find the admin email for this lead
-            const [adminRow] = await pool.query('SELECT email FROM admin_emails WHERE department = ?', [lead.department]);
-            const matchingEmail = adminRow.find(r => {
-                const emailPrefix = r.email.split('@')[0].toLowerCase();
-                return emailPrefix === `${firstName[0].toLowerCase()}${lastName.toLowerCase().replace(/\s/g, '')}` ||
-                       emailPrefix === `${firstName.toLowerCase()}${lastName.toLowerCase().replace(/\s/g, '')}` ||
-                       emailPrefix === `${firstName.toLowerCase()}.${lastName.toLowerCase().replace(/\s/g, '')}` ||
-                       emailPrefix === firstName[0].toLowerCase();
-            });
-            if (matchingEmail) {
-                const [existingUser] = await pool.query('SELECT id FROM users WHERE email = ?', [matchingEmail.email]);
-                if (existingUser.length === 0) {
-                    const username = matchingEmail.email.split('@')[0];
-                    await pool.query(
-                        'INSERT IGNORE INTO users (username, first_name, last_name, display_name, email, department, is_admin, is_master, password_hash) VALUES (?, ?, ?, ?, ?, ?, 1, 0, NULL)',
-                        [username, firstName, lastName, lead.name, matchingEmail.email, lead.department]
-                    );
-                    console.log(`Pre-created placeholder admin account for ${lead.name} (${matchingEmail.email})`);
-                }
             }
         }
 
@@ -1790,10 +1717,10 @@ app.get('/api/auth/captcha', captchaChallengeLimiter, (req, res) => {
     res.json(createCaptchaChallenge());
 });
 
-app.post('/api/auth/captcha/verify', authLimiter, (req, res) => {
+app.post('/api/auth/captcha/verify', authLimiter, async (req, res) => {
     try {
         const captcha = req.body?.captcha || req.body;
-        verifyCaptchaOrThrow(captcha);
+        await verifyCaptchaOrThrow(captcha, { remoteip: requestIp(req) });
         return res.json({ ok: true, captchaTrust: issueCaptchaTrust(captcha) });
     } catch (error) {
         const status = error?.status || 400;
@@ -1867,7 +1794,7 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
     }
 
     try {
-        if (!isMasterAdd && !captchaTrusted) verifyCaptchaOrThrow(captcha);
+        if (!isMasterAdd && !captchaTrusted) await verifyCaptchaOrThrow(captcha, { remoteip: requestIp(req) });
 
         let inviteRecord = null;
         if (!isMasterAdd && inviteToken && typeof inviteToken === 'string' && inviteToken.trim()) {
@@ -1891,19 +1818,21 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
         const [existingEmail] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [emailLower]);
 
         // If user was pre-added by a master (null password_hash), allow self-registration to complete the account
-        if (existingEmail.length > 0 && !isMasterAdd && existingEmail[0].password_hash === null) {
+        if (existingEmail.length > 0 && !isMasterAdd && (!existingEmail[0].password_hash || !String(existingEmail[0].password_hash).trim())) {
             const password_hash = await hashPassword(password);
             const first_name = firstName.trim();
             const last_name = lastName.trim();
             const display_name = `${first_name} ${last_name}`;
+            const alreadyVerified = !!existingEmail[0].email_verified_at;
             await pool.query(
-                'UPDATE users SET first_name = ?, last_name = ?, display_name = ?, password_hash = ?, email_verified_at = NULL, company = COALESCE(?, company), department = COALESCE(?, department), `lead` = COALESCE(?, `lead`) WHERE id = ?',
+                `UPDATE users SET first_name = ?, last_name = ?, display_name = ?, password_hash = ?,
+                 email_verified_at = CASE WHEN email_verified_at IS NOT NULL THEN email_verified_at ELSE NULL END,
+                 company = COALESCE(?, company), department = COALESCE(?, department), \`lead\` = COALESCE(?, \`lead\`) WHERE id = ?`,
                 [first_name, last_name, display_name, password_hash, company || null, department || null, lead || null, existingEmail[0].id]
             );
             const [updated] = await pool.query('SELECT * FROM users WHERE id = ?', [existingEmail[0].id]);
             const user = updated[0];
 
-            // Create default board for newly completed admin accounts
             if (user.is_admin || user.is_master) {
                 await createDefaultAdminBoard(first_name, last_name, user.company, user.department, user.id);
             }
@@ -1912,6 +1841,16 @@ app.post('/api/auth/register', registerLimiter, async (req, res) => {
                 await pool.query('UPDATE board_invites SET invitee_user_id = ? WHERE id = ?', [user.id, inviteRecord.id]);
                 await pool.query('INSERT IGNORE INTO board_members (board_id, user_id, added_by) VALUES (?, ?, ?)', [inviteRecord.board_id, user.id, inviteRecord.inviter_user_id]);
                 await pool.query('UPDATE board_invites SET status = \'ACCEPTED\', accepted_by_user_id = ?, decided_at = NOW() WHERE id = ?', [user.id, inviteRecord.id]);
+            }
+
+            if (alreadyVerified) {
+                const token = buildUserToken(user);
+                return res.status(200).json(withCaptchaTrust({
+                    token,
+                    user: buildUserPublic(user),
+                    accountCompleted: true,
+                    redirectBoardId: inviteRecord?.board_id || null,
+                }));
             }
 
             try {
@@ -2074,7 +2013,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     const loginEmail = String(email || '').trim().toLowerCase();
     try {
         enforceLoginCooldownOrThrow(req, loginEmail);
-        if (!captchaTrusted) verifyCaptchaOrThrow(captcha, { allowSessionProof: true });
+        if (!captchaTrusted) await verifyCaptchaOrThrow(captcha, { allowSessionProof: true, remoteip: requestIp(req) });
 
         const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [loginEmail]);
         if (rows.length === 0) {
@@ -2084,7 +2023,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
                 identity: securityIdentityFromRequest(req),
                 reason: 'user_not_found',
             });
-            return res.status(401).json({ error: 'Invalid email or password' });
+            return res.status(401).json({ error: 'Invalid email or password', code: 'INVALID_CREDENTIALS' });
         }
         const user = rows[0];
         await Promise.all([reloadAdminEmails(), reloadMasterEmails()]);
@@ -2100,8 +2039,11 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             user.is_admin = shouldBeAdmin;
             user.is_master = shouldBeMaster;
         }
-        if (!user.password_hash) {
-            return res.status(401).json({ error: 'Your account has been created but you need to register first. Click "Create an account" to set your name and password.' });
+        if (!user.password_hash || !String(user.password_hash).trim()) {
+            return res.status(401).json({
+                error: 'No password is set for this email yet. Use Forgot password on the sign-in page, or Create an account with the same email to finish setup.',
+                code: 'ACCOUNT_SETUP_REQUIRED',
+            });
         }
         const valid = await verifyPassword(password, user.password_hash);
         if (!valid) {
@@ -2112,7 +2054,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
                 userId: user.id,
                 reason: 'invalid_password',
             });
-            return res.status(401).json({ error: 'Invalid email or password' });
+            return res.status(401).json({ error: 'Invalid email or password', code: 'INVALID_CREDENTIALS' });
         }
         clearLoginFailures(req, loginEmail);
         if (!user.email_verified_at) {
@@ -2208,7 +2150,26 @@ app.post('/api/auth/resend-verification', authLimiter, async (req, res) => {
 });
 
 app.get('/api/auth/me', authMiddleware, (req, res) => {
-    res.json({ user: buildUserPublic(req.user) });
+    const dbUser = req.authDbUser;
+    const token = dbUser ? buildUserToken(dbUser) : null;
+    res.json({
+        user: buildUserPublic(req.user),
+        ...(token ? { token } : {}),
+    });
+});
+
+app.post('/api/auth/logout-all', authMiddleware, async (req, res) => {
+    try {
+        await pool.query('UPDATE users SET session_version = session_version + 1 WHERE id = ?', [req.user.id]);
+        recordAuditEvent({
+            type: 'auth_logout_all',
+            actorId: req.user.id,
+            actorEmail: req.user.email,
+        });
+        res.json({ success: true, message: 'Signed out on all devices. Sign in again on this device.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.get('/api/companies', async (req, res) => {
@@ -2365,7 +2326,10 @@ app.post('/api/auth/reset-password', passwordLimiter, async (req, res) => {
         if (rows.length === 0) return res.status(400).json({ error: 'Invalid or expired reset link' });
 
         const password_hash = await hashPassword(newPassword);
-        await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [password_hash, rows[0].user_id]);
+        await pool.query(
+            'UPDATE users SET password_hash = ?, email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = ?',
+            [password_hash, rows[0].user_id]
+        );
         await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = ? AND used_at IS NULL', [rows[0].user_id]);
         res.json({ success: true });
     } catch (error) {
@@ -2721,7 +2685,14 @@ app.delete('/api/users/:userId', authMiddleware, async (req, res) => {
     // Prevent deleting yourself
     if (Number.parseInt(userId, 10) === req.user.sub) return res.status(400).json({ error: 'You cannot delete your own account' });
     try {
+        const [targetRows] = await pool.query('SELECT email FROM users WHERE id = ?', [userId]);
         await pool.query('DELETE FROM users WHERE id = ?', [userId]);
+        recordAuditEvent({
+            type: 'user_deleted',
+            actorId: req.user.id,
+            actorEmail: req.user.email,
+            target: targetRows[0]?.email || `user#${userId}`,
+        });
         res.json({ success: true });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -2891,6 +2862,9 @@ function sanitizeRolePermissions(input, roleKey) {
     }
     return output;
 }
+
+// --- Health (public, for monitors and uptime checks) ---
+registerHealthRoutes(app, { pool, port: PORT });
 
 // --- Role Label Routes ---
 
@@ -3145,7 +3119,14 @@ app.put('/api/boards/:id', authMiddleware, async (req, res) => {
 app.delete('/api/boards/:id', authMiddleware, async (req, res) => {
     try {
         await assertBoardManager(req.user, req.params.id, 'Only board owners or admins can delete boards');
+        const [boardRows] = await pool.query('SELECT name FROM boards WHERE id = ?', [req.params.id]);
         await pool.query('DELETE FROM boards WHERE id = ?', [req.params.id]);
+        recordAuditEvent({
+            type: 'board_deleted',
+            actorId: req.user.id,
+            actorEmail: req.user.email,
+            target: boardRows[0]?.name || `board#${req.params.id}`,
+        });
         res.json({ success: true });
         broadcastBoardsUpdate();
     } catch (error) {
@@ -3936,6 +3917,12 @@ if (fs.existsSync(FRONTEND_DIST_PATH)) {
 (async () => {
     try {
         pool = await createPool();
+        _authMiddleware = createAuthenticateMiddleware({
+            pool,
+            jwtSecret: JWT_SECRET,
+            getCurrentUserForAuth,
+            buildUserPublic,
+        });
         console.log('MySQL connected');
         await initDb();
         server.listen(PORT, '0.0.0.0', () => {

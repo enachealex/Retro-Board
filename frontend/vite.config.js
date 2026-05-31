@@ -9,6 +9,30 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     base: '/',
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('@hello-pangea/dnd') || id.includes('react-dom') || id.includes('react/')) {
+                return 'vendor-react';
+              }
+              if (id.includes('axios') || id.includes('socket.io')) {
+                return 'vendor-network';
+              }
+              if (id.includes('lucide-react')) {
+                return 'vendor-icons';
+              }
+              return 'vendor';
+            }
+            if (id.includes('/src/App.jsx')) {
+              return 'app-main';
+            }
+          },
+        },
+      },
+      chunkSizeWarningLimit: 600,
+    },
     server: {
       proxy: {
         '/api': {

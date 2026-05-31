@@ -13,6 +13,14 @@ const rateLimit = require('express-rate-limit');
 const path = require('node:path');
 const fs = require('node:fs');
 require('dotenv').config();
+const { buildAllowedOrigins, createCorsOptions } = require('./config/cors');
+const {
+    normalizeAuthUserId,
+    verifyJwtDetailed,
+    tokenErrorMessage,
+    hashPassword,
+    verifyPassword,
+} = require('./auth/session');
 
 // --- SSL Configuration ---
 const SSL_KEY_PATH = path.join(__dirname, 'certs', 'server.key');
@@ -38,7 +46,7 @@ const emailTransporter = nodemailer.createTransport({
 });
 
 const EMAIL_FROM = process.env.SMTP_FROM
-    || (process.env.SMTP_USER ? `"Vault Jump Retro" <${process.env.SMTP_USER}>` : '"Vault Jump Retro" <no-reply@thejumpvault.com>');
+    || (process.env.SMTP_USER ? `"Jump Vault Retro" <${process.env.SMTP_USER}>` : '"Jump Vault Retro" <no-reply@thejumpvault.com>');
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -56,7 +64,7 @@ async function sendWelcomeEmail(firstName, email) {
         await emailTransporter.sendMail({
             from: EMAIL_FROM,
             to: email,
-            subject: 'Welcome to Vault Jump Retro!',
+            subject: 'Welcome to Jump Vault Retro!',
             html: `
 <!DOCTYPE html>
 <html>
@@ -65,7 +73,7 @@ async function sendWelcomeEmail(firstName, email) {
   <tr><td align="center">
     <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
       <tr><td style="background:#001489;padding:28px 36px;">
-        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span>
+        <span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Jump Vault Retro</span>
       </td></tr>
       <tr><td style="padding:36px;">
         <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Welcome, ${safeFirstName}!</h1>
@@ -74,7 +82,7 @@ async function sendWelcomeEmail(firstName, email) {
         <p style="color:#888;font-size:13px;margin:0;">If you didn't create this account, please contact your team administrator.</p>
       </td></tr>
       <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;">
-                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span>
+                <span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span>
       </td></tr>
     </table>
   </td></tr>
@@ -95,7 +103,7 @@ async function sendEmailVerificationEmail(firstName, email, verificationUrl, exp
     await emailTransporter.sendMail({
     from: EMAIL_FROM,
     to: email,
-    subject: 'Confirm your Vault Jump Retro account',
+    subject: 'Confirm your Jump Vault Retro account',
     html: `
 <!DOCTYPE html>
 <html>
@@ -103,17 +111,17 @@ async function sendEmailVerificationEmail(firstName, email, verificationUrl, exp
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fa;padding:40px 0;">
     <tr><td align="center">
         <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
-            <tr><td style="background:#001489;padding:28px 36px;"><span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span></td></tr>
+            <tr><td style="background:#001489;padding:28px 36px;"><span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Jump Vault Retro</span></td></tr>
             <tr><td style="padding:36px;">
                 <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Confirm your email</h1>
-                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 18px;">Hi ${safeFirstName}, confirm this email address to finish creating your Vault Jump Retro account.</p>
+                <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 18px;">Hi ${safeFirstName}, confirm this email address to finish creating your Jump Vault Retro account.</p>
                 <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 24px;">Account email: <strong>${safeEmail}</strong></p>
                 <p style="margin:0 0 28px;"><a href="${safeUrl}" style="display:inline-block;background:#001489;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:600;">Confirm Email</a></p>
                 <p style="color:#666;font-size:13px;line-height:1.5;margin:0 0 12px;">This link expires in ${expiresInHours} hours. If the button does not work, paste this link into your browser:</p>
                 <p style="color:#001489;font-size:12px;line-height:1.5;word-break:break-all;margin:0 0 22px;">${safeUrl}</p>
                 <p style="color:#888;font-size:13px;margin:0;">If you did not create this account, you can ignore this email.</p>
             </td></tr>
-            <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;"><span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span></td></tr>
+            <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;"><span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span></td></tr>
         </table>
     </td></tr>
 </table>
@@ -128,7 +136,7 @@ async function sendPasswordResetEmail(email, resetUrl) {
         await emailTransporter.sendMail({
         from: EMAIL_FROM,
         to: email,
-        subject: 'Reset your Vault Jump Retro password',
+        subject: 'Reset your Jump Vault Retro password',
         html: `
 <!DOCTYPE html>
 <html>
@@ -136,7 +144,7 @@ async function sendPasswordResetEmail(email, resetUrl) {
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6fa;padding:40px 0;">
     <tr><td align="center">
         <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
-            <tr><td style="background:#001489;padding:28px 36px;"><span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Vault Jump Retro</span></td></tr>
+            <tr><td style="background:#001489;padding:28px 36px;"><span style="color:#fff;font-size:20px;font-weight:700;">&#9646; Jump Vault Retro</span></td></tr>
             <tr><td style="padding:36px;">
                 <h1 style="margin:0 0 12px;color:#001489;font-size:24px;">Password reset requested</h1>
                 <p style="color:#444;font-size:15px;line-height:1.6;margin:0 0 16px;">A password reset was requested for <strong>${safeEmail}</strong>.</p>
@@ -146,7 +154,7 @@ async function sendPasswordResetEmail(email, resetUrl) {
                 <p style="color:#001489;font-size:12px;line-height:1.5;word-break:break-all;margin:0 0 22px;">${safeUrl}</p>
                 <p style="color:#888;font-size:13px;margin:0;">If you did not request this, you can ignore this email.</p>
             </td></tr>
-            <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;"><span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Vault Jump. All rights reserved.</span></td></tr>
+            <tr><td style="background:#f4f6fa;padding:18px 36px;text-align:center;"><span style="color:#aaa;font-size:12px;">&copy; ${new Date().getFullYear()} The Jump Vault. All rights reserved.</span></td></tr>
         </table>
     </td></tr>
 </table>
@@ -289,13 +297,13 @@ function buildUserPublic(user) {
     };
 }
 function verifyJwt(token) {
-    try {
-        return jwt.verify(token, JWT_SECRET);
-    } catch { return null; }
+    return verifyJwtDetailed(token, JWT_SECRET).payload;
 }
 async function getCurrentUserForAuth(userId) {
+    const normalizedId = normalizeAuthUserId(userId);
+    if (!normalizedId) return null;
     const result = await pool.request()
-        .input('id', sql.Int, userId)
+        .input('id', sql.Int, normalizedId)
         .query(`SELECT u.id, u.username, u.first_name, u.last_name, u.display_name, u.email, u.department, u.[lead], u.email_verified_at, u.is_admin, u.is_master, u.is_overlord,
                        CASE WHEN me.email IS NULL THEN 0 ELSE 1 END AS listed_master,
                        CASE WHEN ae.email IS NULL THEN 0 ELSE 1 END AS listed_admin,
@@ -331,29 +339,6 @@ async function getCurrentUserForAuth(userId) {
     delete user.listed_overlord;
     return user;
 }
-async function hashPassword(password) {
-    const salt = crypto.randomBytes(16).toString('hex');
-    return new Promise((resolve, reject) => {
-        crypto.scrypt(password, salt, 64, (err, derived) => {
-            if (err) reject(err);
-            else resolve(`${salt}:${derived.toString('hex')}`);
-        });
-    });
-}
-async function verifyPassword(password, stored) {
-    const [salt, hash] = stored.split(':');
-    return new Promise((resolve, reject) => {
-        crypto.scrypt(password, salt, 64, (err, derived) => {
-            if (err) reject(err);
-            else {
-                try {
-                    resolve(crypto.timingSafeEqual(Buffer.from(hash, 'hex'), derived));
-                } catch { resolve(false); }
-            }
-        });
-    });
-}
-
 const CAPTCHA_TTL_MS = Number.parseInt(process.env.CAPTCHA_TTL_MS || '120000', 10);
 const CAPTCHA_LENGTH = 6;
 const CAPTCHA_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -646,15 +631,25 @@ function verifyCaptchaOrThrow(captcha, options = {}) {
 async function authMiddleware(req, res, next) {
     const authHeader = req.headers['authorization'];
     if (!authHeader?.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Unauthorized' });
+        return res.status(401).json({ error: 'Unauthorized', code: 'MISSING_TOKEN' });
     }
-    const payload = verifyJwt(authHeader.slice(7));
-    if (!payload) return res.status(401).json({ error: 'Invalid or expired token' });
+    const { payload, errorCode } = verifyJwtDetailed(authHeader.slice(7), JWT_SECRET);
+    if (!payload) {
+        return res.status(401).json({
+            error: tokenErrorMessage(errorCode),
+            code: errorCode || 'TOKEN_INVALID',
+        });
+    }
+    const userId = normalizeAuthUserId(payload.sub);
+    if (!userId) {
+        return res.status(401).json({ error: tokenErrorMessage('TOKEN_INVALID'), code: 'TOKEN_INVALID' });
+    }
 
     try {
-        const currentUser = await getCurrentUserForAuth(payload.sub);
-        if (!currentUser) return res.status(401).json({ error: 'User no longer exists' });
-        if (!currentUser.email_verified_at) return res.status(403).json({ error: 'Please confirm your email before continuing.' });
+        const currentUser = await getCurrentUserForAuth(userId);
+        if (!currentUser) return res.status(401).json({ error: 'User no longer exists', code: 'USER_NOT_FOUND' });
+        if (!currentUser.email_verified_at) return res.status(403).json({ error: 'Please confirm your email before continuing.', code: 'EMAIL_NOT_VERIFIED' });
+        req.authDbUser = currentUser;
         req.user = {
             ...payload,
             ...buildUserPublic(currentUser),
@@ -697,24 +692,8 @@ const mssqlConfig = (() => {
 
 let pool;
 
-// --- CORS ---
-const REQUIRED_PUBLIC_ORIGINS = [
-    'https://retroboard.thejumpvault.com',
-    'https://enachealex.github.io',
-    'https://thejumpvault.com',
-    'https://www.thejumpvault.com',
-];
-
-const CORS_ORIGINS = Array.from(new Set([
-    ...(process.env.CORS_ORIGINS
-        ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
-        : [
-            'http://localhost:5173', 'http://localhost:5174', 'http://localhost:5000',
-            'http://192.168.1.48', 'http://192.168.1.48:5000',
-            'https://localhost:5443', 'https://192.168.1.48:5443'
-          ]),
-    ...REQUIRED_PUBLIC_ORIGINS,
-]));
+// --- CORS (RetroBoard app origins only; main marketing site is intentionally excluded) ---
+const CORS_ORIGINS = buildAllowedOrigins();
 
 const getAppBaseUrl = () => {
     if (process.env.APP_BASE_URL) return process.env.APP_BASE_URL.replace(/\/$/, '');
@@ -753,10 +732,15 @@ function emailVerificationResponse(user, extra = {}) {
     };
 }
 
-const corsOptions = { origin: CORS_ORIGINS, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] };
+const corsOptions = createCorsOptions(CORS_ORIGINS, (origin) => {
+    console.info('[SECURITY]', JSON.stringify({ ts: new Date().toISOString(), type: 'cors_rejected', origin }));
+});
 
 // --- Express + Socket.io Setup ---
 const app = express();
+if (process.env.TRUST_PROXY === 'true' || process.env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+}
 const server = http.createServer(app);
 
 server.keepAliveTimeout = 65000;
@@ -875,18 +859,18 @@ io.use(async (socket, next) => {
             return next(new Error('Unauthorized'));
         }
 
-        const payload = verifyJwt(token);
+        const { payload, errorCode } = verifyJwtDetailed(token, JWT_SECRET);
         if (!payload) {
             logSecurityEvent('socket_auth_failed', {
                 alert: true,
-                reason: 'invalid_token',
+                reason: errorCode || 'invalid_token',
                 socketId: socket.id,
                 ip: socket.handshake?.address || 'unknown',
             });
             return next(new Error('Unauthorized'));
         }
 
-        const currentUser = await getCurrentUserForAuth(payload.sub);
+        const currentUser = await getCurrentUserForAuth(normalizeAuthUserId(payload.sub));
         if (!currentUser || !currentUser.email_verified_at) {
             logSecurityEvent('socket_auth_failed', {
                 alert: true,
@@ -1804,7 +1788,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
                 identity: securityIdentityFromRequest(req),
                 reason: 'user_not_found',
             });
-            return res.status(401).json({ error: 'Invalid email or password' });
+            return res.status(401).json({ error: 'Invalid email or password', code: 'INVALID_CREDENTIALS' });
         }
         const user = result.recordset[0];
 
@@ -1829,8 +1813,12 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             user.is_master = shouldBeMaster;
             user.is_overlord = shouldBeOverlord;
         }
-        if (!user.password_hash)
-            return res.status(401).json({ error: 'Your account has been created but you need to register first. Click "Create an account" to set your name and password.' });
+        if (!user.password_hash || !String(user.password_hash).trim()) {
+            return res.status(401).json({
+                error: 'Your account has been created but you need to register first. Click "Create an account" to set your name and password.',
+                code: 'ACCOUNT_SETUP_REQUIRED',
+            });
+        }
         const valid = await verifyPassword(password, user.password_hash);
         if (!valid) {
             recordLoginFailure(req, loginEmail, 'invalid_password');
@@ -1840,7 +1828,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
                 userId: user.id,
                 reason: 'invalid_password',
             });
-            return res.status(401).json({ error: 'Invalid email or password' });
+            return res.status(401).json({ error: 'Invalid email or password', code: 'INVALID_CREDENTIALS' });
         }
         clearLoginFailures(req, loginEmail);
         if (!user.email_verified_at) {
@@ -2009,7 +1997,12 @@ app.post('/api/auth/reset-password', passwordLimiter, async (req, res) => {
 });
 
 app.get('/api/auth/me', authMiddleware, (req, res) => {
-    res.json({ user: buildUserPublic(req.user) });
+    const dbUser = req.authDbUser;
+    const token = dbUser ? buildUserToken(dbUser) : null;
+    res.json({
+        user: buildUserPublic(req.user),
+        ...(token ? { token } : {}),
+    });
 });
 
 app.patch('/api/auth/profile', authMiddleware, async (req, res) => {

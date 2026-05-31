@@ -3,7 +3,9 @@ import { Eye, EyeOff } from "lucide-react";
 import axios from "axios";
 import { useAuth } from "./AuthContext";
 import { getAuthUrl } from "./config";
-import CaptchaChallenge from "./CaptchaChallenge";
+import CaptchaChallenge, { isCaptchaComplete } from "./CaptchaChallenge";
+import { APP_NAME } from "./branding";
+import { getCaptchaTrustToken } from "./captchaTrust";
 import "./Auth.css";
 
 export default function LoginPage({ onGoToRegister }) {
@@ -98,6 +100,11 @@ export default function LoginPage({ onGoToRegister }) {
     setAuthError(null);
     if (!email.trim() || !password) return;
 
+    if (!getCaptchaTrustToken()) {
+      setSecurityStep(true);
+      return;
+    }
+
     const trustAttempt = await login(email.trim(), password, null);
     if (trustAttempt && typeof trustAttempt === 'object' && trustAttempt.password_weak) {
       setForceUpdate({ token: trustAttempt.token, user: trustAttempt.user });
@@ -121,7 +128,7 @@ export default function LoginPage({ onGoToRegister }) {
 
   const handleSecuritySubmit = async (e) => {
     e.preventDefault();
-    if (!captcha.token || !captcha.answer.trim()) {
+    if (!isCaptchaComplete(captcha)) {
       setAuthError("Complete the security check.");
       return;
     }
@@ -175,7 +182,12 @@ export default function LoginPage({ onGoToRegister }) {
         setForgotMessage("If that email exists, a reset link has been sent.");
       }
     } catch (err) {
-      setForgotMessage(err.response?.data?.error || "Could not send reset email right now.");
+      const data = err.response?.data;
+      if (data?.message === "Unauthorized" && data?.request_id) {
+        setForgotMessage("The API is blocked by Cloudflare Access. An admin must allow public access to api.thejumpvault.com (see docs/CLOUDFLARE-API-ACCESS.md).");
+      } else {
+        setForgotMessage(data?.error || "Could not send reset email right now.");
+      }
     } finally {
       setForgotLoading(false);
     }
@@ -276,9 +288,9 @@ export default function LoginPage({ onGoToRegister }) {
               <img
                 className="auth-logo-image"
                  src="/vault-jump.png"
-                alt="Vault Jump Retro logo"
+                alt={`${APP_NAME} logo`}
               />
-              <span className="auth-logo-text">Vault Jump Retro</span>
+              <span className="auth-logo-text">{APP_NAME}</span>
           </div>
           <h2 className="auth-title">Update Your Password</h2>
           <p className="auth-subtitle">Your password is too short. Please set a new password (at least 6 characters).</p>
@@ -344,12 +356,12 @@ export default function LoginPage({ onGoToRegister }) {
             <img
               className="auth-logo-image"
               src="/vault-jump.png"
-              alt="Vault Jump Retro logo"
+              alt={`${APP_NAME} logo`}
             />
-            <span className="auth-logo-text">Vault Jump Retro</span>
+            <span className="auth-logo-text">{APP_NAME}</span>
           </div>
           <h2 className="auth-title">Email Confirmation</h2>
-          <p className="auth-subtitle">Confirming your Vault Jump Retro account.</p>
+          <p className="auth-subtitle">Confirming your {APP_NAME} account.</p>
 
           {verifyStatus.loading && <output className="auth-info">Confirming your email...</output>}
           {verifyStatus.success && <output className="auth-info">Email confirmed. You can now sign in.</output>}
@@ -395,9 +407,9 @@ export default function LoginPage({ onGoToRegister }) {
             <img
               className="auth-logo-image"
                src="/vault-jump.png"
-              alt="Vault Jump Retro logo"
+              alt={`${APP_NAME} logo`}
             />
-            <span className="auth-logo-text">Vault Jump Retro</span>
+            <span className="auth-logo-text">{APP_NAME}</span>
           </div>
           <h2 className="auth-title">Reset Password</h2>
           <p className="auth-subtitle">Set your new password.</p>
@@ -450,9 +462,9 @@ export default function LoginPage({ onGoToRegister }) {
             <img
               className="auth-logo-image"
               src="/vault-jump.png"
-              alt="Vault Jump Retro logo"
+              alt={`${APP_NAME} logo`}
             />
-            <span className="auth-logo-text">Vault Jump Retro</span>
+            <span className="auth-logo-text">{APP_NAME}</span>
           </div>
           <h2 className="auth-title">CAPTCHA Verification</h2>
           <p className="auth-subtitle">Complete the CAPTCHA security check to sign in.</p>
@@ -474,7 +486,7 @@ export default function LoginPage({ onGoToRegister }) {
             <button
               type="submit"
               className="auth-btn-primary"
-              disabled={authLoading || !captcha.token || !captcha.answer.trim()}
+              disabled={authLoading || !isCaptchaComplete(captcha)}
             >
               {authLoading ? "Signing in…" : "Sign In"}
             </button>
@@ -500,11 +512,11 @@ export default function LoginPage({ onGoToRegister }) {
             <img
               className="auth-logo-image"
                src="/vault-jump.png"
-              alt="Vault Jump Retro logo"
+              alt={`${APP_NAME} logo`}
             />
-          <span className="auth-logo-text">Vault Jump Retro</span>
+          <span className="auth-logo-text">{APP_NAME}</span>
         </div>
-        <h2 className="auth-title">Welcome to Vault Jump Retro</h2>
+        <h2 className="auth-title">Welcome to {APP_NAME}</h2>
         <p className="auth-subtitle">Sign in to access your boards</p>
 
         <form className="auth-form" onSubmit={handleSubmit}>

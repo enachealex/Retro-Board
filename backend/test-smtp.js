@@ -46,9 +46,9 @@ const transporter = nodemailer.createTransport({
         const info = await transporter.sendMail({
             from,
             to: recipient,
-            subject: 'Vault Jump Retro SMTP test',
-            text: 'This is a test message from the Vault Jump Retro backend SMTP test script. If you received this, SMTP is configured correctly.',
-            html: '<p>This is a test message from the Vault Jump Retro backend SMTP test script.</p><p>If you received this, SMTP is configured correctly.</p>',
+            subject: 'Jump Vault Retro SMTP test',
+            text: 'This is a test message from the Jump Vault Retro backend SMTP test script. If you received this, SMTP is configured correctly.',
+            html: '<p>This is a test message from the Jump Vault Retro backend SMTP test script.</p><p>If you received this, SMTP is configured correctly.</p>',
         });
         console.log('Sent. messageId:', info.messageId);
         console.log('Response:', info.response);

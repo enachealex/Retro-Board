@@ -1,0 +1,10 @@
+# Free Cloudflare Tunnel — copy to ~/.cloudflared/config.yml on the server.
+# Serves RetroBoard app + API from one hostname (no Zero Trust Access required).
+
+tunnel: YOUR_TUNNEL_ID
+credentials-file: /home/YOUR_USER/.cloudflared/YOUR_TUNNEL_ID.json
+
+ingress:
+  - hostname: retroboard.thejumpvault.com
+    service: http://127.0.0.1:5000
+  - service: http_status:404
